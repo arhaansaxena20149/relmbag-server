@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 import sqlite3
 import random
 import hashlib
+import os
 
 app = Flask(__name__)
 
@@ -73,7 +74,6 @@ def roll_rarity():
         if roll <= current:
             return rarity
 
-# Example creature pools
 CREATURES = {
     "Common": ["Pebblit", "Sprig", "Fluffo"],
     "Uncommon": ["Thornix", "Glidera", "Emberoo"],
@@ -103,7 +103,7 @@ def signup():
         conn.commit()
         return jsonify({"status": "success"})
     except:
-        return jsonify({"status": "error", "message": "User already exists"})
+        return jsonify({"status": "error", "message": "User exists"})
     finally:
         conn.close()
 
@@ -188,7 +188,6 @@ def open_crate():
         conn.close()
         return jsonify({"status": "error", "message": "Not enough tokens"})
 
-    # deduct tokens
     conn.execute(
         "UPDATE users SET tokens = tokens - 10 WHERE username=?",
         (username,)
@@ -212,7 +211,15 @@ def open_crate():
     })
 
 # --------------------------
-# RUN SERVER
+# HEALTH CHECK (IMPORTANT FOR RENDER)
+# --------------------------
+@app.route("/")
+def home():
+    return "RelmBag Server Running"
+
+# --------------------------
+# RUN SERVER (RENDER READY)
 # --------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5050)
+    port = int(os.environ.get("PORT", 5050))
+    app.run(host="0.0.0.0", port=port)
