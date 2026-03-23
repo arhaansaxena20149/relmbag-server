@@ -1,7 +1,33 @@
 from __future__ import annotations
 
+import threading
+import time
+
+
+def start_heartbeat(username):
+    def loop():
+        while True:
+            try:
+                requests.post(f"{SERVER_URL}/heartbeat", json={
+                    "username": username
+                })
+            except:
+                pass
+            time.sleep(5)
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
+
 import sys
 from functools import partial
+
+try:
+    import requests
+except ModuleNotFoundError:  # pragma: no cover
+    import http_client as requests
+
+SERVER_URL = "https://relmbag-server.onrender.com"
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon
@@ -414,7 +440,7 @@ class DashboardPage(BasePage):
         user = self.game_window.current_user
         if not user:
             return
-        summary = inventory.get_inventory_summary(user["id"])
+        summary = inventory.get_inventory_summary(user["username"])
         self.welcome_label.setText(f"Welcome back, {user['username']}")
         self.creature_count[1].setText(str(summary["count"]))
         self.total_value[1].setText(str(summary["total_value"]))
@@ -555,7 +581,7 @@ class CratePage(BasePage):
 
     def _finish_roll(self) -> None:
         try:
-            result = crate_system.open_crate(self.game_window.current_user["id"])
+            result = crate_system.open_crate(self.game_window.current_user["username"])
         except crate_system.CrateError as error:
             status_message(self.feedback_label, str(error), "#F47C7C")
             return
@@ -677,7 +703,7 @@ class InventoryPage(BasePage):
         sort_map = {"Rarity": "rarity", "Value": "value", "Level": "level"}
         rarity_filter = self.filter_combo.currentText()
         selected_filter = None if rarity_filter == "All" else rarity_filter
-        creatures = inventory.get_inventory(user["id"], sort_by=sort_map[self.sort_combo.currentText()], rarity_filter=selected_filter)
+        creatures = inventory.get_inventory(user["username"], sort_by=sort_map[self.sort_combo.currentText()], rarity_filter=selected_filter)
         self.current_creatures = {creature["id"]: creature for creature in creatures}
         total_value = sum(creature["value"] for creature in creatures)
         self.inventory_summary.setText(
@@ -1060,7 +1086,7 @@ class TradingPage(BasePage):
         if self.current_snapshot is None or self.current_snapshot["status"] != "open":
             return
         offered_ids = {creature["id"] for creature in self.current_snapshot["your_side"]["creatures"]}
-        creatures = inventory.get_inventory(self.game_window.current_user["id"], sort_by="rarity")
+        creatures = inventory.get_inventory(self.game_window.current_user["username"], sort_by="rarity")
         for creature in creatures:
             suffix = " [OFFERED]" if creature["id"] in offered_ids else ""
             item = QListWidgetItem(
@@ -1389,7 +1415,7 @@ class FightingPage(BasePage):
         user = self.game_window.current_user
         if user is None:
             return
-        creatures = inventory.get_inventory(user["id"], sort_by="rarity")
+        creatures = inventory.get_inventory(user["username"], sort_by="rarity")
         self.challenge_creature_combo.clear()
         self.accept_creature_combo.clear()
         for creature in creatures:
@@ -1767,10 +1793,10 @@ class ProfilePage(BasePage):
         user = self.game_window.current_user
         if user is None:
             return
-        summary = inventory.get_inventory_summary(user["id"])
+        summary = inventory.get_inventory_summary(user["username"])
         trades = trading.list_user_trades(user["id"])
         open_trades = sum(1 for trade_row in trades if trade_row["status"] in {"pending", "open"})
-        top_creatures = inventory.get_inventory(user["id"], sort_by="value")[:5]
+        top_creatures = inventory.get_inventory(user["username"], sort_by="value")[:5]
 
         self.username_label.setText(user["username"])
         self.tokens_label.setText(f"Tokens: {user['tokens']}")
@@ -1886,7 +1912,8 @@ class GameWindow(QMainWindow):
     def set_current_user(self, user: dict) -> None:
         self.seen_trade_notifications.clear()
         self.seen_battle_notifications.clear()
-        self.current_user = database.get_user_by_id(user["id"])
+        self.current_user = user
+        start_heartbeat(self.current_user["username"])
         self.refresh_session()
         self.presence_timer.start()
         self.notification_timer.start()
@@ -1896,17 +1923,54 @@ class GameWindow(QMainWindow):
     def refresh_session(self) -> None:
         if self.current_user is None:
             return
-        database.touch_user_presence(self.current_user["id"])
-        refreshed = database.get_user_by_id(self.current_user["id"])
-        if refreshed is None:
-            self.logout()
-            return
-        self.current_user = refreshed
+
+        username = str(self.current_user.get("username", "")).strip()
+        fetched_users: list[dict] = []
+        try:
+            response = requests.get(f"{SERVER_URL}/users", timeout=10)
+            if response.ok:
+                payload = response.json()
+                if isinstance(payload, list):
+                    fetched_users = payload
+        except Exception:
+            fetched_users = []
+
+        if fetched_users:
+            user_meta = next(
+                (
+                    user
+                    for user in fetched_users
+                    if isinstance(user, dict)
+                    and str(user.get("username", "")).strip().lower() == username.lower()
+                ),
+                None,
+            )
+            if user_meta is None:
+                self.logout()
+                return
+
+            self.current_user["tokens"] = int(user_meta.get("tokens", self.current_user.get("tokens", 0)) or 0)
+            if "real_name" in user_meta:
+                self.current_user["real_name"] = user_meta.get("real_name")
+            if "email" in user_meta:
+                self.current_user["email"] = user_meta.get("email")
+
         self.session_label.setText(f"Player: {self.current_user['username']}")
         self.balance_label.setText(f"Tokens: {self.current_user['tokens']}")
-        online_count = len(database.list_online_users(self.current_user["id"]))
-        incoming_trades = len(trading.list_incoming_trade_requests(self.current_user["id"]))
-        incoming_battles = len(combat.list_incoming_battle_requests(self.current_user["id"]))
+
+        # No "online presence" endpoint is provided by the server, so default to 0.
+        online_count = 0
+
+        # Keep request counters best-effort using the existing local modules.
+        try:
+            incoming_trades = len(trading.list_incoming_trade_requests(self.current_user.get("id")))
+        except Exception:
+            incoming_trades = 0
+        try:
+            incoming_battles = len(combat.list_incoming_battle_requests(self.current_user.get("id")))
+        except Exception:
+            incoming_battles = 0
+
         self.online_label.setText(f"Online Players: {online_count}")
         self.notifications_label.setText(f"Requests: {incoming_trades + incoming_battles}")
 
@@ -1997,7 +2061,6 @@ class GameWindow(QMainWindow):
 
 
 def main() -> None:
-    database.initialize_database()
     app = QApplication(sys.argv)
     app.setStyleSheet(APP_STYLESHEET)
     app.setWindowIcon(QIcon(str(APP_ICON_PNG)))

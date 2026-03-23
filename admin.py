@@ -1,7 +1,15 @@
+
 from __future__ import annotations
 
 import sys
 from functools import partial
+
+try:
+    import requests
+except ModuleNotFoundError:  # pragma: no cover
+    import http_client as requests
+
+SERVER_URL = "https://relmbag-server.onrender.com"
 
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QIcon
@@ -22,10 +30,35 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-import database
 import inventory
 from config import ADMIN_PASSWORD, ADMIN_USERNAME, APP_ICON_PNG, APP_TITLE
 from ui_shared import APP_STYLESHEET, apply_fade_in, with_alpha
+
+
+def _server_get_users() -> list[dict]:
+    try:
+        response = requests.get(f"{SERVER_URL}/users", timeout=10)
+        if not response.ok:
+            return []
+        payload = response.json()
+        return payload if isinstance(payload, list) else []
+    except Exception:
+        return []
+
+
+def _server_post_add_tokens(username: str, amount: int) -> dict | None:
+    try:
+        response = requests.post(
+            f"{SERVER_URL}/add_tokens",
+            json={"username": username, "amount": amount},
+            timeout=10,
+        )
+        if not response.ok:
+            return None
+        payload = response.json()
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
 
 
 def set_status(label: QLabel, text: str, color: str) -> None:
@@ -284,7 +317,22 @@ class AdminPanelPage(QWidget):
         self.roster_timer.stop()
 
     def refresh_roster(self, announce: bool = False) -> None:
-        players = database.list_admin_players()
+        raw_users = _server_get_users()
+        players = [
+            {
+                "id": user.get("username"),
+                "username": user.get("username"),
+                "real_name": user.get("real_name") or "",
+                "email": user.get("email") or "",
+                "tokens": int(user.get("tokens", 0) or 0),
+                # The admin UI expects these fields. The server spec doesn't include presence/creature_count,
+                # so we leave them as safe defaults.
+                "is_online": False,
+                "creature_count": 0,
+            }
+            for user in raw_users
+            if isinstance(user, dict) and user.get("username") is not None
+        ]
         query = self.filter_input.text().strip().lower()
         if query:
             players = [
@@ -339,7 +387,27 @@ class AdminPanelPage(QWidget):
         if self.current_user_id is None:
             self._clear_user_display()
             return
-        user = database.get_user_by_id(self.current_user_id)
+        raw_users = _server_get_users()
+        username = str(self.current_user_id)
+        user_meta = next(
+            (
+                user
+                for user in raw_users
+                if isinstance(user, dict) and user.get("username", "").strip().lower() == username.strip().lower()
+            ),
+            None,
+        )
+        user = None
+        if isinstance(user_meta, dict):
+            user = {
+                "id": user_meta.get("username"),
+                "username": user_meta.get("username"),
+                "real_name": user_meta.get("real_name") or "",
+                "email": user_meta.get("email") or "",
+                "tokens": int(user_meta.get("tokens", 0) or 0),
+                "is_online": False,
+                "creature_count": 0,
+            }
         if user is None:
             self.current_user_id = None
             self._clear_user_display()
@@ -361,7 +429,7 @@ class AdminPanelPage(QWidget):
         self._set_detail_buttons_enabled(False)
 
     def _render_user(self, user: dict) -> None:
-        online = database.is_user_online(user["id"])
+        online = bool(user.get("is_online", False))
         self.username_label.setText(f"Username: {user['username']}")
         self.presence_label.setText(f"Status: {'Online' if online else 'Offline'}")
         self.presence_label.setStyleSheet(
@@ -386,7 +454,30 @@ class AdminPanelPage(QWidget):
 
     def adjust_tokens(self, user_id: int, delta: int) -> None:
         try:
-            new_balance = database.adjust_user_tokens(user_id, delta)
+            username = str(user_id)
+            payload = _server_post_add_tokens(username, delta)
+            if not isinstance(payload, dict):
+                raise ValueError("Could not update token balance.")
+            if payload.get("status") != "success" and payload.get("status") is not None:
+                message = str(payload.get("error") or payload.get("message") or "Could not update token balance.")
+                raise ValueError(message)
+            new_balance = payload.get("tokens")
+            if new_balance is None:
+                # Best-effort fallback if the server omits updated tokens in the response.
+                raw_users = _server_get_users()
+                user_meta = next(
+                    (
+                        user
+                        for user in raw_users
+                        if isinstance(user, dict) and user.get("username", "").strip().lower() == username.strip().lower()
+                    ),
+                    None,
+                )
+                if isinstance(user_meta, dict):
+                    new_balance = int(user_meta.get("tokens", 0) or 0)
+                else:
+                    new_balance = delta
+            new_balance = int(new_balance)
         except ValueError as error:
             QMessageBox.warning(self, APP_TITLE, str(error))
             return
@@ -428,7 +519,6 @@ class AdminWindow(QMainWindow):
 
 
 def main() -> None:
-    database.initialize_database()
     app = QApplication(sys.argv)
     app.setStyleSheet(APP_STYLESHEET)
     app.setWindowIcon(QIcon(str(APP_ICON_PNG)))

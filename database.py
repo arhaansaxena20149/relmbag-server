@@ -13,6 +13,22 @@ def get_connection() -> sqlite3.Connection:
     connection = sqlite3.connect(DATABASE_PATH)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
+    # Lazily ensure schema exists so listing queries don't crash when the app
+    # skips calling initialize_database() at startup.
+    try:
+        has_users_table = (
+            connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
+            ).fetchone()
+            is not None
+        )
+        if not has_users_table:
+            _create_schema(connection)
+            connection.commit()
+    except Exception:
+        # If the schema check fails for any reason, let the original callers
+        # surface a meaningful DB error later.
+        pass
     return connection
 
 
@@ -33,6 +49,85 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
     return dict(row) if row is not None else None
 
 
+def _create_schema(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            real_name TEXT NOT NULL,
+            username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            password_hash TEXT NOT NULL,
+            tokens INTEGER NOT NULL DEFAULT 0 CHECK(tokens >= 0),
+            last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS owned_creatures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            creature_key TEXT NOT NULL,
+            creature_name TEXT NOT NULL,
+            rarity TEXT NOT NULL,
+            image_path TEXT NOT NULL,
+            level INTEGER NOT NULL DEFAULT 1 CHECK(level >= 1),
+            xp INTEGER NOT NULL DEFAULT 0 CHECK(xp >= 0),
+            value_roll REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            initiator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            initiator_tokens INTEGER NOT NULL DEFAULT 0 CHECK(initiator_tokens >= 0),
+            recipient_tokens INTEGER NOT NULL DEFAULT 0 CHECK(recipient_tokens >= 0),
+            initiator_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(initiator_confirmed IN (0, 1)),
+            recipient_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(recipient_confirmed IN (0, 1)),
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'open', 'completed', 'cancelled', 'declined')),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS trade_creatures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            trade_id INTEGER NOT NULL REFERENCES trades(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            creature_id INTEGER NOT NULL REFERENCES owned_creatures(id) ON DELETE CASCADE,
+            UNIQUE(trade_id, creature_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS battles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            challenger_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            opponent_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            challenger_creature_id INTEGER NOT NULL REFERENCES owned_creatures(id) ON DELETE CASCADE,
+            opponent_creature_id INTEGER REFERENCES owned_creatures(id) ON DELETE CASCADE,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'active', 'completed', 'cancelled')),
+            state_json TEXT NOT NULL DEFAULT '{}',
+            challenger_move TEXT,
+            opponent_move TEXT,
+            winner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            xp_awarded INTEGER NOT NULL DEFAULT 0 CHECK(xp_awarded IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_owned_creatures_user_id ON owned_creatures(user_id);
+        CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
+        CREATE INDEX IF NOT EXISTS idx_trade_creatures_trade_id ON trade_creatures(trade_id);
+        CREATE INDEX IF NOT EXISTS idx_battles_status ON battles(status);
+        CREATE INDEX IF NOT EXISTS idx_battles_challenger_id ON battles(challenger_id);
+        CREATE INDEX IF NOT EXISTS idx_battles_opponent_id ON battles(opponent_id);
+        """
+    )
+
+    # Backfill for older DBs that may have missed the last_seen column.
+    user_columns = {row["name"] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
+    if "last_seen" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
+
+
 def fetch_one(query: str, params: Iterable[Any] = ()) -> dict | None:
     with get_connection() as connection:
         row = connection.execute(query, tuple(params)).fetchone()
@@ -48,81 +143,7 @@ def fetch_all(query: str, params: Iterable[Any] = ()) -> list[dict]:
 def initialize_database(seed_demo: bool = False) -> None:
     ensure_directories()
     with transaction() as connection:
-        connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                real_name TEXT NOT NULL,
-                username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                password_hash TEXT NOT NULL,
-                tokens INTEGER NOT NULL DEFAULT 0 CHECK(tokens >= 0),
-                last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS owned_creatures (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                creature_key TEXT NOT NULL,
-                creature_name TEXT NOT NULL,
-                rarity TEXT NOT NULL,
-                image_path TEXT NOT NULL,
-                level INTEGER NOT NULL DEFAULT 1 CHECK(level >= 1),
-                xp INTEGER NOT NULL DEFAULT 0 CHECK(xp >= 0),
-                value_roll REAL NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS trades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                initiator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                recipient_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                initiator_tokens INTEGER NOT NULL DEFAULT 0 CHECK(initiator_tokens >= 0),
-                recipient_tokens INTEGER NOT NULL DEFAULT 0 CHECK(recipient_tokens >= 0),
-                initiator_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(initiator_confirmed IN (0, 1)),
-                recipient_confirmed INTEGER NOT NULL DEFAULT 0 CHECK(recipient_confirmed IN (0, 1)),
-                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'open', 'completed', 'cancelled', 'declined')),
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS trade_creatures (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                trade_id INTEGER NOT NULL REFERENCES trades(id) ON DELETE CASCADE,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                creature_id INTEGER NOT NULL REFERENCES owned_creatures(id) ON DELETE CASCADE,
-                UNIQUE(trade_id, creature_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS battles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                challenger_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                opponent_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                challenger_creature_id INTEGER NOT NULL REFERENCES owned_creatures(id) ON DELETE CASCADE,
-                opponent_creature_id INTEGER REFERENCES owned_creatures(id) ON DELETE CASCADE,
-                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'active', 'completed', 'cancelled')),
-                state_json TEXT NOT NULL DEFAULT '{}',
-                challenger_move TEXT,
-                opponent_move TEXT,
-                winner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                xp_awarded INTEGER NOT NULL DEFAULT 0 CHECK(xp_awarded IN (0, 1)),
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_owned_creatures_user_id ON owned_creatures(user_id);
-            CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
-            CREATE INDEX IF NOT EXISTS idx_trade_creatures_trade_id ON trade_creatures(trade_id);
-            CREATE INDEX IF NOT EXISTS idx_battles_status ON battles(status);
-            CREATE INDEX IF NOT EXISTS idx_battles_challenger_id ON battles(challenger_id);
-            CREATE INDEX IF NOT EXISTS idx_battles_opponent_id ON battles(opponent_id);
-            """
-        )
-
-        user_columns = {row["name"] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
-        if "last_seen" not in user_columns:
-            connection.execute("ALTER TABLE users ADD COLUMN last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
+        _create_schema(connection)
 
     from sprite_loader import ensure_sprite_assets
 

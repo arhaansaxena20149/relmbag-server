@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-from config import CREATURE_CATALOG, RARITY_COLORS, RARITY_INDEX, RARITY_ORDER
+try:
+    import requests
+except ModuleNotFoundError:  # pragma: no cover
+    import http_client as requests
+
+SERVER_URL = "https://relmbag-server.onrender.com"
+
+from config import CREATURE_CATALOG, RARITY_COLORS, RARITY_INDEX, RARITY_ORDER, slugify
 from leveling import calculate_creature_value, scale_stats
 
 import database
+from sprite_loader import get_sprite_path
 
 
 def enrich_creature(creature: dict) -> dict:
@@ -36,7 +44,50 @@ def get_creature(creature_id: int) -> dict | None:
 
 
 def get_inventory(user_id: int, sort_by: str = "rarity", rarity_filter: str | None = None) -> list[dict]:
-    creatures = [enrich_creature(creature) for creature in database.list_creatures_for_user(user_id)]
+    username = str(user_id)
+    raw_creatures: list[dict] = []
+    try:
+        response = requests.get(f"{SERVER_URL}/inventory/{username}", timeout=10)
+        if response.ok:
+            payload = response.json()
+            if isinstance(payload, list):
+                raw_creatures = payload
+    except Exception:
+        raw_creatures = []
+
+    creatures: list[dict] = []
+    for index, creature in enumerate(raw_creatures):
+        if not isinstance(creature, dict):
+            continue
+        creature_key = creature.get("creature") or creature.get("creature_key")
+        if not creature_key:
+            continue
+
+        candidate_key = creature_key
+        if candidate_key not in CREATURE_CATALOG:
+            candidate_key = slugify(str(candidate_key))
+        if candidate_key not in CREATURE_CATALOG:
+            continue
+
+        template = CREATURE_CATALOG[candidate_key]
+        rarity = creature.get("rarity") or template.get("rarity")
+        level = int(creature.get("level", 1) or 1)
+        xp = int(creature.get("xp", 0) or 0)
+        value_roll = float(creature.get("value_roll", 1.0) or 1.0)
+
+        creature_payload = {
+            "id": creature.get("id", index),
+            "user_id": user_id,
+            "creature_key": template["key"],
+            "creature_name": template["name"],
+            "rarity": rarity,
+            "image_path": str(get_sprite_path(template["key"])),
+            "level": level,
+            "xp": xp,
+            "value_roll": value_roll,
+        }
+        creatures.append(enrich_creature(creature_payload))
+
     if rarity_filter and rarity_filter in RARITY_ORDER:
         creatures = [creature for creature in creatures if creature["rarity"] == rarity_filter]
 

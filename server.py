@@ -3,6 +3,7 @@ import sqlite3
 import random
 import hashlib
 import os
+import time
 
 app = Flask(__name__)
 
@@ -38,6 +39,25 @@ def init_db():
         rarity TEXT,
         level INTEGER DEFAULT 1,
         xp INTEGER DEFAULT 0
+    )
+    """)
+        # 🔴 TRADES TABLE
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS trades (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_user TEXT,
+        to_user TEXT,
+        offer TEXT,
+        request TEXT,
+        status TEXT DEFAULT 'pending'
+    )
+    """)
+
+    # 🔴 PRESENCE TABLE (ONLINE STATUS)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS presence (
+        username TEXT PRIMARY KEY,
+        last_seen INTEGER
     )
     """)
 
@@ -133,10 +153,29 @@ def login():
 @app.route("/users", methods=["GET"])
 def get_users():
     conn = get_db()
-    users = conn.execute("SELECT username, real_name, email, tokens FROM users").fetchall()
+
+    users = conn.execute("SELECT * FROM users").fetchall()
+    presence = conn.execute("SELECT * FROM presence").fetchall()
+
     conn.close()
 
-    return jsonify([dict(u) for u in users])
+    presence_map = {p["username"]: p["last_seen"] for p in presence}
+    now = int(time.time())
+
+    result = []
+    for u in users:
+        last_seen = presence_map.get(u["username"], 0)
+        online = (now - last_seen) < 10
+
+        result.append({
+            "username": u["username"],
+            "real_name": u["real_name"],
+            "email": u["email"],
+            "tokens": u["tokens"],
+            "online": online
+        })
+
+    return jsonify(result)
 
 @app.route("/add_tokens", methods=["POST"])
 def add_tokens():
@@ -217,6 +256,82 @@ def open_crate():
 def home():
     return "RelmBag Server Running"
 
+# --------------------------
+# TraDING
+# --------------------------
+@app.route("/create_trade", methods=["POST"])
+def create_trade():
+    data = request.json
+
+    conn = get_db()
+    conn.execute("""
+        INSERT INTO trades (from_user, to_user, offer, request, status)
+        VALUES (?, ?, ?, ?, 'pending')
+    """, (
+        data["from_user"],
+        data["to_user"],
+        str(data["offer"]),
+        str(data["request"])
+    ))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"status": "success"})
+
+@app.route("/get_trades/<username>", methods=["GET"])
+def get_trades(username):
+    conn = get_db()
+
+    trades = conn.execute("""
+        SELECT * FROM trades
+        WHERE to_user=? AND status='pending'
+    """, (username,)).fetchall()
+
+    conn.close()
+
+    return jsonify([dict(t) for t in trades])
+
+@app.route("/accept_trade", methods=["POST"])
+def accept_trade():
+    data = request.json
+
+    conn = get_db()
+    conn.execute("""
+        UPDATE trades SET status='accepted'
+        WHERE id=?
+    """, (data["trade_id"],))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"status": "accepted"})
+
+# --------------------------
+# fighting
+# --------------------------
+@app.route("/fight", methods=["POST"])
+def fight():
+    data = request.json
+
+    import random
+    winner = random.choice([data["player1"], data["player2"]])
+
+    return jsonify({
+        "winner": winner
+    })
+@app.route("/heartbeat", methods=["POST"])
+def heartbeat():
+    data = request.json
+    username = data["username"]
+
+    conn = get_db()
+    conn.execute("""
+        INSERT OR REPLACE INTO presence (username, last_seen)
+        VALUES (?, ?)
+    """, (username, int(time.time())))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"status": "ok"})
 # --------------------------
 # RUN SERVER (RENDER READY)
 # --------------------------
