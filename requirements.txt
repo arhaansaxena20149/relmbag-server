@@ -2,3 +2,4 @@ PyQt5==5.15.11
 Pillow>=10.0.0
 bcrypt>=5.0.0
 flask
+requests
