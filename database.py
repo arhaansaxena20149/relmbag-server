@@ -141,7 +141,10 @@ def _create_schema(connection: sqlite3.Connection) -> None:
     # Backfill for older DBs that may have missed columns or used old names.
     user_columns = {row["name"] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
     if "last_seen" not in user_columns:
-        connection.execute("ALTER TABLE users ADD COLUMN last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
+        # FIX: SQLite cannot use non-constant defaults like CURRENT_TIMESTAMP in ALTER TABLE.
+        # Use a constant string and update it in a separate step if necessary.
+        connection.execute("ALTER TABLE users ADD COLUMN last_seen TEXT NOT NULL DEFAULT '2024-01-01 00:00:00'")
+        connection.execute("UPDATE users SET last_seen = CURRENT_TIMESTAMP")
     if "password" in user_columns and "password_hash" not in user_columns:
         connection.execute("ALTER TABLE users RENAME COLUMN password TO password_hash")
     if "real_name" not in user_columns:
