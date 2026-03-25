@@ -1,17 +1,8 @@
 
 from __future__ import annotations
-
 import sys
 from functools import partial
-
-try:
-    import requests
-except ModuleNotFoundError:  # pragma: no cover
-    import http_client as requests
-
-SERVER_URL = "https://relmbag-server.onrender.com"
-
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThreadPool
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QApplication,
@@ -31,35 +22,14 @@ from PyQt5.QtWidgets import (
 )
 
 import inventory
+import auth
+import database
 from config import ADMIN_PASSWORD, ADMIN_USERNAME, APP_ICON_PNG, APP_TITLE
 from ui_shared import APP_STYLESHEET, apply_fade_in, with_alpha
+from network import safe_request, safe_json
+from workers import Worker
 
-
-def _server_get_users() -> list[dict]:
-    try:
-        response = requests.get(f"{SERVER_URL}/users", timeout=10)
-        if not response.ok:
-            return []
-        payload = response.json()
-        return payload if isinstance(payload, list) else []
-    except Exception:
-        return []
-
-
-def _server_post_add_tokens(username: str, amount: int) -> dict | None:
-    try:
-        response = requests.post(
-            f"{SERVER_URL}/add_tokens",
-            json={"username": username, "amount": amount},
-            timeout=10,
-        )
-        if not response.ok:
-            return None
-        payload = response.json()
-        return payload if isinstance(payload, dict) else None
-    except Exception:
-        return None
-
+from api import get_users
 
 def set_status(label: QLabel, text: str, color: str) -> None:
     label.setText(text)
@@ -136,9 +106,13 @@ class AdminPlayerCard(QFrame):
         on_select,
         on_add_one,
         on_add_ten,
+        on_kick,
+        on_ban,
+        on_reset_password,
     ) -> None:
         super().__init__()
-        accent = "#63D471" if player["is_online"] else "#F2C14E"
+        is_banned = player.get("is_banned", False)
+        accent = "#E14B4B" if is_banned else ("#63D471" if player["is_online"] else "#F2C14E")
         background = "#15263A" if selected else "#101824"
         border = accent if selected else with_alpha(accent, 155)
         self.setStyleSheet(
@@ -166,7 +140,7 @@ class AdminPlayerCard(QFrame):
         info_layout = QVBoxLayout()
         name = QLabel(player["username"])
         name.setStyleSheet("font-size: 17px; font-weight: 800;")
-        status_text = "Online" if player["is_online"] else "Offline"
+        status_text = "BANNED" if is_banned else ("Online" if player["is_online"] else "Offline")
         meta = QLabel(
             f"{status_text}  |  {player['tokens']} tokens  |  "
             f"{player['creature_count']} creature{'s' if player['creature_count'] != 1 else ''}"
@@ -183,14 +157,39 @@ class AdminPlayerCard(QFrame):
         select_button = QPushButton("View")
         select_button.setObjectName("secondaryButton")
         select_button.clicked.connect(on_select)
-        add_one_button = QPushButton("+1 Token")
+        
+        token_layout = QHBoxLayout()
+        add_one_button = QPushButton("+1")
         add_one_button.setObjectName("successButton")
         add_one_button.clicked.connect(on_add_one)
-        add_ten_button = QPushButton("+10 Tokens")
+        add_ten_button = QPushButton("+10")
+        add_ten_button.setObjectName("successButton")
         add_ten_button.clicked.connect(on_add_ten)
+        token_layout.addWidget(add_one_button)
+        token_layout.addWidget(add_ten_button)
+
+        mod_layout = QHBoxLayout()
+        kick_button = QPushButton("Kick")
+        kick_button.setObjectName("secondaryButton")
+        kick_button.setStyleSheet("background: #F2C14E; color: black;")
+        kick_button.clicked.connect(on_kick)
+        ban_button = QPushButton("Unban" if is_banned else "Ban")
+        ban_button.setObjectName("secondaryButton")
+        ban_button.setStyleSheet(f"background: {'#63D471' if is_banned else '#E14B4B'}; color: white;")
+        ban_button.clicked.connect(on_ban)
+        
+        reset_pw_button = QPushButton("Reset PW")
+        reset_pw_button.setObjectName("secondaryButton")
+        reset_pw_button.setStyleSheet("background: #AEBBD0; color: black;")
+        reset_pw_button.clicked.connect(on_reset_password)
+        
+        mod_layout.addWidget(kick_button)
+        mod_layout.addWidget(ban_button)
+        mod_layout.addWidget(reset_pw_button)
+
         button_layout.addWidget(select_button)
-        button_layout.addWidget(add_one_button)
-        button_layout.addWidget(add_ten_button)
+        button_layout.addLayout(token_layout)
+        button_layout.addLayout(mod_layout)
 
         layout.addWidget(avatar)
         layout.addLayout(info_layout, 1)
@@ -202,9 +201,6 @@ class AdminPanelPage(QWidget):
         super().__init__()
         self.main_window = main_window
         self.current_user_id: int | None = None
-        self.roster_timer = QTimer(self)
-        self.roster_timer.setInterval(3000)
-        self.roster_timer.timeout.connect(lambda: self.refresh_roster())
 
         root = QVBoxLayout(self)
         root.setSpacing(18)
@@ -310,29 +306,36 @@ class AdminPanelPage(QWidget):
 
     def activate(self) -> None:
         self.refresh_roster(announce=True)
-        if not self.roster_timer.isActive():
-            self.roster_timer.start()
 
     def deactivate(self) -> None:
-        self.roster_timer.stop()
+        # This method is called on logout, but no specific cleanup is needed for the panel.
+        pass
 
     def refresh_roster(self, announce: bool = False) -> None:
-        raw_users = _server_get_users()
-        players = [
-            {
-                "id": user.get("username"),
+        worker = Worker(get_users)
+        worker.signals.finished.connect(lambda users: self._on_roster_fetched(users, announce))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_roster_fetched(self, raw_users: list[dict], announce: bool) -> None:
+        players = []
+        for user in raw_users:
+            if not isinstance(user, dict) or user.get("username") is None:
+                continue
+            
+            # Unify ID across server versions
+            uid = user.get("id") or user.get("username")
+            
+            players.append({
+                "id": uid,
                 "username": user.get("username"),
                 "real_name": user.get("real_name") or "",
                 "email": user.get("email") or "",
                 "tokens": int(user.get("tokens", 0) or 0),
-                # The admin UI expects these fields. The server spec doesn't include presence/creature_count,
-                # so we leave them as safe defaults.
-                "is_online": False,
-                "creature_count": 0,
-            }
-            for user in raw_users
-            if isinstance(user, dict) and user.get("username") is not None
-        ]
+                "is_online": bool(user.get("online", False) or user.get("is_online", False)),
+                "is_banned": bool(user.get("is_banned", False)),
+                "creature_count": int(user.get("creature_count", 0)),
+            })
+
         query = self.filter_input.text().strip().lower()
         if query:
             players = [
@@ -371,12 +374,40 @@ class AdminPanelPage(QWidget):
                 on_select=partial(self.select_user, player["id"]),
                 on_add_one=partial(self.adjust_tokens, player["id"], 1),
                 on_add_ten=partial(self.adjust_tokens, player["id"], 10),
+                on_kick=partial(self.kick_user, player["id"]),
+                on_ban=partial(self.toggle_ban, player["id"], not player["is_banned"]),
+                on_reset_password=partial(self.reset_user_password, player["id"]),
             )
             self.roster_list_layout.addWidget(card)
         self.roster_list_layout.addStretch(1)
         self.refresh_current_user(silent=True)
         if announce:
             set_status(self.status_label, "Player roster refreshed.", "#63D471")
+
+    def kick_user(self, user_id: int) -> None:
+        import api
+        worker = Worker(api.kick_user, user_id)
+        worker.signals.finished.connect(lambda success: self.refresh_roster())
+        QThreadPool.globalInstance().start(worker)
+        set_status(self.status_label, f"Kicking user {user_id}...", "#F2C14E")
+
+    def toggle_ban(self, user_id: int, should_ban: bool) -> None:
+        import api
+        worker = Worker(api.ban_user, user_id, should_ban)
+        worker.signals.finished.connect(lambda success: self.refresh_roster())
+        QThreadPool.globalInstance().start(worker)
+        action = "Banning" if should_ban else "Unbanning"
+        set_status(self.status_label, f"{action} user {user_id}...", "#E14B4B")
+
+    def reset_user_password(self, user_id: int) -> None:
+        from PyQt5.QtWidgets import QInputDialog, QLineEdit
+        password, ok = QInputDialog.getText(self, "Reset Password", "Enter new password:", QLineEdit.Password)
+        if ok and password:
+            import api
+            worker = Worker(api.reset_password, user_id, password)
+            worker.signals.finished.connect(lambda success: set_status(self.status_label, "Password reset successfully." if success else "Failed to reset password.", "#63D471" if success else "#E14B4B"))
+            QThreadPool.globalInstance().start(worker)
+            set_status(self.status_label, f"Resetting password for user {user_id}...", "#F2C14E")
 
     def select_user(self, user_id: int) -> None:
         self.current_user_id = user_id
@@ -387,32 +418,39 @@ class AdminPanelPage(QWidget):
         if self.current_user_id is None:
             self._clear_user_display()
             return
-        raw_users = _server_get_users()
+        worker = Worker(get_users)
+        worker.signals.finished.connect(lambda users: self._on_current_user_fetched(users, silent))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_current_user_fetched(self, raw_users: list[dict], silent: bool) -> None:
+        if self.current_user_id is None:
+            self._clear_user_display()
+            return
+        
         username = str(self.current_user_id)
         user_meta = next(
             (
                 user
                 for user in raw_users
-                if isinstance(user, dict) and user.get("username", "").strip().lower() == username.strip().lower()
+                if isinstance(user, dict) and str(user.get("username")).lower() == username.lower()
             ),
             None,
         )
-        user = None
-        if isinstance(user_meta, dict):
-            user = {
-                "id": user_meta.get("username"),
-                "username": user_meta.get("username"),
-                "real_name": user_meta.get("real_name") or "",
-                "email": user_meta.get("email") or "",
-                "tokens": int(user_meta.get("tokens", 0) or 0),
-                "is_online": False,
-                "creature_count": 0,
-            }
-        if user is None:
+        if user_meta is None:
             self.current_user_id = None
             self._clear_user_display()
             set_status(self.status_label, "That player no longer exists.", "#F47C7C")
             return
+
+        user = {
+            "id": user_meta.get("username"),
+            "username": user_meta.get("username"),
+            "real_name": user_meta.get("real_name") or "",
+            "email": user_meta.get("email") or "",
+            "tokens": int(user_meta.get("tokens", 0) or 0),
+            "is_online": bool(user_meta.get("online", False)),
+            "creature_count": 0,
+        }
         self._render_user(user)
         if not silent:
             set_status(self.status_label, "Player details updated.", "#63D471")
@@ -430,15 +468,15 @@ class AdminPanelPage(QWidget):
 
     def _render_user(self, user: dict) -> None:
         online = bool(user.get("is_online", False))
-        self.username_label.setText(f"Username: {user['username']}")
+        self.username_label.setText(f"Username: {user.get('username', '-')}")
         self.presence_label.setText(f"Status: {'Online' if online else 'Offline'}")
         self.presence_label.setStyleSheet(
             f"color: {'#63D471' if online else '#F2C14E'}; font-weight: 700;"
         )
-        self.real_name_label.setText(f"Real Name: {user['real_name']}")
-        self.email_label.setText(f"Email: {user['email']}")
-        self.tokens_label.setText(f"Tokens: {user['tokens']}")
-        self.inventory_box.setPlainText(inventory.admin_inventory_text(user["id"]))
+        self.real_name_label.setText(f"Real Name: {user.get('real_name', '-')}")
+        self.email_label.setText(f"Email: {user.get('email', '-')}")
+        self.tokens_label.setText(f"Tokens: {user.get('tokens', 0)}")
+        self.inventory_box.setPlainText(inventory.admin_inventory_text(user.get("id")))
         self.detail_hint.setText("Private identity fields stay here in the admin app only.")
         self._set_detail_buttons_enabled(True)
 
@@ -448,44 +486,24 @@ class AdminPanelPage(QWidget):
 
     def adjust_selected_tokens(self, delta: int) -> None:
         if self.current_user_id is None:
-            QMessageBox.warning(self, APP_TITLE, "Select a player first.")
             return
         self.adjust_tokens(self.current_user_id, delta)
 
-    def adjust_tokens(self, user_id: int, delta: int) -> None:
-        try:
-            username = str(user_id)
-            payload = _server_post_add_tokens(username, delta)
-            if not isinstance(payload, dict):
-                raise ValueError("Could not update token balance.")
-            if payload.get("status") != "success" and payload.get("status") is not None:
-                message = str(payload.get("error") or payload.get("message") or "Could not update token balance.")
-                raise ValueError(message)
-            new_balance = payload.get("tokens")
-            if new_balance is None:
-                # Best-effort fallback if the server omits updated tokens in the response.
-                raw_users = _server_get_users()
-                user_meta = next(
-                    (
-                        user
-                        for user in raw_users
-                        if isinstance(user, dict) and user.get("username", "").strip().lower() == username.strip().lower()
-                    ),
-                    None,
-                )
-                if isinstance(user_meta, dict):
-                    new_balance = int(user_meta.get("tokens", 0) or 0)
-                else:
-                    new_balance = delta
-            new_balance = int(new_balance)
-        except ValueError as error:
-            QMessageBox.warning(self, APP_TITLE, str(error))
+    def adjust_tokens(self, user_id: int | str, delta: int) -> None:
+        import api
+        worker = Worker(api.add_tokens, user_id, delta)
+        worker.signals.finished.connect(lambda success: self.refresh_roster())
+        QThreadPool.globalInstance().start(worker)
+        set_status(self.status_label, f"Adjusting tokens for user {user_id}...", "#F2C14E")
+
+    def _on_tokens_adjusted(self, payload: dict | None) -> None:
+        if not payload or payload.get("status") != "success":
+            QMessageBox.warning(self, "Error", "Could not adjust tokens.")
             return
-        self.current_user_id = user_id
         self.refresh_roster()
         set_status(
             self.status_label,
-            f"Added {delta} token{'s' if delta != 1 else ''}. New balance: {new_balance}.",
+            "Token balance updated.",
             "#63D471",
         )
 

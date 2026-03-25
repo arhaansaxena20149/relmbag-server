@@ -14,44 +14,59 @@ class CombatError(ValueError):
 
 
 def build_combatant(creature: dict) -> dict:
-    template = CREATURE_CATALOG[creature["creature_key"]]
-    stats = scale_stats(template["base_stats"], creature["rarity"], creature["level"])
-    unlocked_moves = [move for move in template["moves"] if creature["level"] >= move["unlock_level"]]
+    # FIX: Defensive dictionary access
+    creature_key = creature.get("creature_key")
+    template = CREATURE_CATALOG.get(creature_key)
+    if not template:
+        raise CombatError(f"Creature template '{creature_key}' not found.")
+        
+    rarity = creature.get("rarity", "Common")
+    level = creature.get("level", 1)
+    
+    stats = scale_stats(template.get("base_stats", {}), rarity, level)
+    unlocked_moves = [move for move in template.get("moves", []) if level >= move.get("unlock_level", 1)]
     return {
-        "id": creature["id"],
-        "owner_id": creature["user_id"],
-        "name": creature["creature_name"],
-        "rarity": creature["rarity"],
-        "level": creature["level"],
-        "image_path": creature["image_path"],
+        "id": creature.get("id"),
+        "owner_id": creature.get("user_id"),
+        "name": creature.get("creature_name", "Unknown"),
+        "rarity": rarity,
+        "level": level,
+        "image_path": creature.get("image_path"),
         "stats": stats,
-        "current_hp": stats["HP"],
-        "max_hp": stats["HP"],
+        "current_hp": stats.get("HP", 100),
+        "max_hp": stats.get("HP", 100),
         "moves": unlocked_moves,
-        "cooldowns": {move["name"]: 0 for move in unlocked_moves},
+        "cooldowns": {move.get("name", "move"): 0 for move in unlocked_moves},
     }
 
 
 def _available_moves(combatant: dict) -> list[dict]:
-    return [move for move in combatant["moves"] if combatant["cooldowns"].get(move["name"], 0) == 0]
+    cooldowns = combatant.get("cooldowns", {})
+    return [move for move in combatant.get("moves", []) if cooldowns.get(move.get("name"), 0) == 0]
 
 
 def get_move_options(combatant: dict | None) -> list[dict]:
     if not combatant:
         return []
+    cooldowns = combatant.get("cooldowns", {})
     return [
         {
             **move,
-            "remaining_cooldown": combatant["cooldowns"].get(move["name"], 0),
-            "available": combatant["cooldowns"].get(move["name"], 0) == 0,
+            "remaining_cooldown": cooldowns.get(move.get("name"), 0),
+            "available": cooldowns.get(move.get("name"), 0) == 0,
         }
-        for move in combatant["moves"]
+        for move in combatant.get("moves", [])
     ]
 
 
 def calculate_damage(attacker: dict, defender: dict, move: dict, rng: random.Random) -> dict:
-    raw_power = move["damage"] + (attacker["stats"]["Attack"] * 0.9)
-    defense_block = defender["stats"]["Defense"] * 0.55
+    # FIX: Defensive programming
+    move_dmg = move.get("damage", 0)
+    attacker_atk = attacker.get("stats", {}).get("Attack", 0)
+    defender_def = defender.get("stats", {}).get("Defense", 0)
+    
+    raw_power = move_dmg + (attacker_atk * 0.9)
+    defense_block = defender_def * 0.55
     base_damage = max(1, raw_power - defense_block)
     crit = rng.random() <= 0.10
     variance = rng.uniform(0.90, 1.10)
@@ -62,30 +77,39 @@ def calculate_damage(attacker: dict, defender: dict, move: dict, rng: random.Ran
 
 def _select_move(combatant: dict, move_name: str) -> dict:
     for move in _available_moves(combatant):
-        if move["name"] == move_name:
+        if move.get("name") == move_name:
             return move
     raise CombatError("That move is unavailable right now.")
 
 
 def _mark_cooldown(combatant: dict, move: dict) -> None:
-    if move["cooldown"] > 0:
-        combatant["cooldowns"][move["name"]] = move["cooldown"] + 1
+    cooldown = move.get("cooldown", 0)
+    name = move.get("name")
+    if cooldown > 0 and name:
+        if "cooldowns" not in combatant:
+            combatant["cooldowns"] = {}
+        combatant["cooldowns"][name] = cooldown + 1
 
 
 def _tick_cooldowns(*combatants: dict) -> None:
     for combatant in combatants:
-        for move_name, remaining in list(combatant["cooldowns"].items()):
+        cooldowns = combatant.get("cooldowns", {})
+        for move_name, remaining in list(cooldowns.items()):
             if remaining > 0:
-                combatant["cooldowns"][move_name] = remaining - 1
+                cooldowns[move_name] = remaining - 1
 
 
 def _turn_order(challenger: dict, opponent: dict, challenger_move: dict, opponent_move: dict, rng: random.Random) -> list[tuple[str, str, dict]]:
     first_role, second_role = "challenger", "opponent"
     first_move, second_move = challenger_move, opponent_move
-    if opponent["stats"]["Speed"] > challenger["stats"]["Speed"]:
+    
+    c_speed = challenger.get("stats", {}).get("Speed", 0)
+    o_speed = opponent.get("stats", {}).get("Speed", 0)
+    
+    if o_speed > c_speed:
         first_role, second_role = "opponent", "challenger"
         first_move, second_move = opponent_move, challenger_move
-    elif opponent["stats"]["Speed"] == challenger["stats"]["Speed"] and rng.random() < 0.5:
+    elif o_speed == c_speed and rng.random() < 0.5:
         first_role, second_role = "opponent", "challenger"
         first_move, second_move = opponent_move, challenger_move
     return [(first_role, second_role, first_move), (second_role, first_role, second_move)]
@@ -114,35 +138,52 @@ def resolve_round(state: dict, challenger_move_name: str, opponent_move_name: st
         raise CombatError("Battle is already finished.")
 
     generator = rng or random.Random()
-    challenger = state["challenger"]
-    opponent = state["opponent"]
-    challenger_move = _select_move(challenger, challenger_move_name)
-    opponent_move = _select_move(opponent, opponent_move_name)
+    challenger = state.get("challenger")
+    opponent = state.get("opponent")
+    
+    # FIX: Ensure combatants exist
+    if not challenger or not opponent:
+        print(f"[ERROR] Combatants missing in state: challenger={bool(challenger)}, opponent={bool(opponent)}")
+        raise CombatError("Battle state is corrupted: combatants missing.")
 
-    state["round_number"] += 1
+    try:
+        challenger_move = _select_move(challenger, challenger_move_name)
+        opponent_move = _select_move(opponent, opponent_move_name)
+    except CombatError as e:
+        print(f"[ERROR] Move selection failed: {e}")
+        raise
+
+    state["round_number"] = state.get("round_number", 0) + 1
     round_log = [f"Round {state['round_number']}"]
 
     for attacker_role, defender_role, move in _turn_order(challenger, opponent, challenger_move, opponent_move, generator):
-        attacker = state[attacker_role]
-        defender = state[defender_role]
-        if attacker["current_hp"] <= 0 or defender["current_hp"] <= 0:
+        attacker = state.get(attacker_role)
+        defender = state.get(defender_role)
+        
+        if not attacker or not defender:
+            continue
+            
+        if attacker.get("current_hp", 0) <= 0 or defender.get("current_hp", 0) <= 0:
             continue
 
         damage_info = calculate_damage(attacker, defender, move, generator)
-        defender["current_hp"] = max(0, defender["current_hp"] - damage_info["damage"])
-        crit_text = " Critical hit!" if damage_info["critical"] else ""
-        round_log.append(f"{attacker['name']} used {move['name']} for {damage_info['damage']} damage.{crit_text}")
+        defender["current_hp"] = max(0, defender.get("current_hp", 0) - damage_info.get("damage", 0))
+        crit_text = " Critical hit!" if damage_info.get("critical") else ""
+        round_log.append(f"{attacker.get('name', 'Attacker')} used {move.get('name', 'move')} for {damage_info.get('damage', 0)} damage.{crit_text}")
         _mark_cooldown(attacker, move)
-        if defender["current_hp"] <= 0:
-            round_log.append(f"{defender['name']} was defeated.")
+        if defender.get("current_hp", 0) <= 0:
+            round_log.append(f"{defender.get('name', 'Defender')} was defeated.")
 
     _tick_cooldowns(challenger, opponent)
     state["last_round"] = round_log
+    
+    if "log" not in state:
+        state["log"] = []
     state["log"].extend(round_log)
 
-    if challenger["current_hp"] <= 0 or opponent["current_hp"] <= 0:
+    if challenger.get("current_hp", 0) <= 0 or opponent.get("current_hp", 0) <= 0:
         state["finished"] = True
-        state["winner_role"] = "challenger" if challenger["current_hp"] > 0 else "opponent"
+        state["winner_role"] = "challenger" if challenger.get("current_hp", 0) > 0 else "opponent"
 
     return state
 
@@ -252,51 +293,64 @@ def _build_snapshot(connection, battle_id: int, viewer_id: int | None = None) ->
     battle = _load_battle(connection, battle_id)
     _ensure_battle_open(battle)
 
+    # FIX: Defensive dictionary access and null checks
     state = _deserialize_state(battle["state_json"])
-    challenger_creature = inventory.get_creature(battle["challenger_creature_id"]) if battle["challenger_creature_id"] else None
-    opponent_creature = inventory.get_creature(battle["opponent_creature_id"]) if battle["opponent_creature_id"] else None
+    
+    challenger_creature_id = battle.get("challenger_creature_id")
+    opponent_creature_id = battle.get("opponent_creature_id")
+    
+    challenger_creature = inventory.get_creature(challenger_creature_id) if challenger_creature_id else None
+    opponent_creature = inventory.get_creature(opponent_creature_id) if opponent_creature_id else None
 
     snapshot = {
-        "id": battle["id"],
-        "status": battle["status"],
-        "winner_user_id": battle["winner_user_id"],
+        "id": battle.get("id"),
+        "status": battle.get("status"),
+        "winner_user_id": battle.get("winner_user_id"),
         "round_number": state.get("round_number", 0),
-        "finished": bool(state.get("finished")) or battle["status"] == "completed",
+        "finished": bool(state.get("finished")) or battle.get("status") == "completed",
         "log": state.get("log", []),
         "last_round": state.get("last_round", []),
         "reward_summary": state.get("reward_summary", []),
-        "created_at": battle["created_at"],
-        "updated_at": battle["updated_at"],
+        "created_at": battle.get("created_at"),
+        "updated_at": battle.get("updated_at"),
         "challenger": {
-            "id": battle["challenger_id"],
-            "username": battle["challenger_username"],
+            "id": battle.get("challenger_id"),
+            "username": battle.get("challenger_username"),
             "creature": challenger_creature,
             "combatant": state.get("challenger"),
-            "move_submitted": bool(battle["challenger_move"]),
+            "move_submitted": bool(battle.get("challenger_move")),
         },
         "opponent": {
-            "id": battle["opponent_id"],
-            "username": battle["opponent_username"],
+            "id": battle.get("opponent_id"),
+            "username": battle.get("opponent_username"),
             "creature": opponent_creature,
             "combatant": state.get("opponent"),
-            "move_submitted": bool(battle["opponent_move"]),
+            "move_submitted": bool(battle.get("opponent_move")),
         },
     }
 
     if viewer_id is not None:
-        role, other_role = _participant_role(battle, viewer_id)
-        snapshot["your_role"] = role
-        snapshot["their_role"] = other_role
-        snapshot["your_side"] = snapshot[role]
-        snapshot["their_side"] = snapshot[other_role]
-        snapshot["your_pending_move"] = battle[f"{role}_move"]
-        snapshot["their_move_submitted"] = bool(battle[f"{other_role}_move"])
-        snapshot["your_move_options"] = get_move_options(snapshot["your_side"]["combatant"])
-        snapshot["can_accept"] = battle["status"] == "pending" and role == "opponent"
-        snapshot["can_cancel"] = battle["status"] == "pending"
-        snapshot["can_submit_moves"] = battle["status"] == "active" and not snapshot["finished"]
-        snapshot["can_forfeit"] = battle["status"] == "active" and not snapshot["finished"]
-        snapshot["you_won"] = battle["winner_user_id"] == viewer_id if battle["winner_user_id"] else None
+        try:
+            role, other_role = _participant_role(battle, viewer_id)
+            snapshot["your_role"] = role
+            snapshot["their_role"] = other_role
+            snapshot["your_side"] = snapshot.get(role)
+            snapshot["their_side"] = snapshot.get(other_role)
+            snapshot["your_pending_move"] = battle.get(f"{role}_move")
+            snapshot["their_move_submitted"] = bool(battle.get(f"{other_role}_move"))
+            
+            # FIX: Check if combatant exists before getting move options
+            your_combatant = snapshot["your_side"].get("combatant") if snapshot.get("your_side") else None
+            snapshot["your_move_options"] = get_move_options(your_combatant)
+            
+            snapshot["can_accept"] = battle.get("status") == "pending" and role == "opponent"
+            snapshot["can_cancel"] = battle.get("status") == "pending"
+            snapshot["can_submit_moves"] = battle.get("status") == "active" and not snapshot["finished"]
+            snapshot["can_forfeit"] = battle.get("status") == "active" and not snapshot["finished"]
+            snapshot["you_won"] = battle.get("winner_user_id") == viewer_id if battle.get("winner_user_id") else None
+        except CombatError:
+            # Handle cases where viewer is not a participant (e.g., admin or spectator if implemented)
+            pass
 
     return snapshot
 
@@ -363,7 +417,7 @@ def create_battle(challenger_id: int, opponent_username: str, challenger_creatur
         ).fetchone()
         if opponent is None:
             raise CombatError("That opponent does not exist.")
-        if opponent["id"] == challenger_id:
+        if opponent.get("id") == challenger_id:
             raise CombatError("You cannot battle yourself.")
 
         existing = connection.execute(
@@ -458,19 +512,25 @@ def submit_move(battle_id: int, user_id: int, move_name: str) -> dict:
         battle = _load_battle(connection, battle_id)
         _ensure_battle_open(battle)
         role, other_role = _participant_role(battle, user_id)
-        if battle["status"] != "active":
+        if battle.get("status") != "active":
             raise CombatError("This battle is not active.")
 
-        state = _deserialize_state(battle["state_json"])
+        state = _deserialize_state(battle.get("state_json"))
         if state.get("finished"):
             raise CombatError("Battle is already finished.")
 
-        _select_move(state[role], move_name)
+        # FIX: Defensive dictionary access
+        attacker_combatant = state.get(role)
+        if not attacker_combatant:
+            raise CombatError("Your combatant is missing from the battle state.")
+            
+        _select_move(attacker_combatant, move_name)
         my_column = f"{role}_move"
         other_column = f"{other_role}_move"
-        other_move = battle[other_column]
+        other_move = battle.get(other_column)
 
         if other_move:
+            print(f"[DEBUG] Both moves submitted for battle {battle_id}. Resolving round.")
             updated_state = resolve_round(state, move_name if role == "challenger" else other_move, other_move if role == "challenger" else move_name)
             update_params: list = [
                 _serialize_state(updated_state),
@@ -488,12 +548,19 @@ def submit_move(battle_id: int, user_id: int, move_name: str) -> dict:
             """
 
             if updated_state.get("finished"):
-                winner_role = updated_state["winner_role"]
+                print(f"[DEBUG] Battle {battle_id} finished. Awarding rewards.")
+                winner_role = updated_state.get("winner_role")
                 loser_role = "opponent" if winner_role == "challenger" else "challenger"
-                winner_creature_id = updated_state[winner_role]["id"]
-                loser_creature_id = updated_state[loser_role]["id"]
-                _attach_rewards(updated_state, winner_creature_id, loser_creature_id)
-                winner_user_id = battle["challenger_id"] if winner_role == "challenger" else battle["opponent_id"]
+                
+                winner_combatant = updated_state.get(winner_role)
+                loser_combatant = updated_state.get(loser_role)
+                
+                if winner_combatant and loser_combatant:
+                    winner_creature_id = winner_combatant.get("id")
+                    loser_creature_id = loser_combatant.get("id")
+                    _attach_rewards(updated_state, winner_creature_id, loser_creature_id)
+                
+                winner_user_id = battle.get("challenger_id") if winner_role == "challenger" else battle.get("opponent_id")
                 update_sql = """
                     UPDATE battles
                     SET status = 'completed',
@@ -514,6 +581,7 @@ def submit_move(battle_id: int, user_id: int, move_name: str) -> dict:
                 ]
             connection.execute(update_sql, tuple(update_params))
         else:
+            print(f"[DEBUG] Move '{move_name}' submitted by {role} for battle {battle_id}. Waiting for opponent.")
             connection.execute(
                 f"""
                 UPDATE battles
@@ -532,23 +600,31 @@ def forfeit_battle(battle_id: int, user_id: int) -> dict:
         battle = _load_battle(connection, battle_id)
         _ensure_battle_open(battle)
         role, other_role = _participant_role(battle, user_id)
-        if battle["status"] != "active":
+        if battle.get("status") != "active":
             raise CombatError("Only active battles can be forfeited.")
 
-        state = _deserialize_state(battle["state_json"])
+        state = _deserialize_state(battle.get("state_json"))
         if state.get("finished"):
             raise CombatError("Battle is already finished.")
 
+        print(f"[DEBUG] User {user_id} is forfeiting battle {battle_id}.")
         state["finished"] = True
         state["winner_role"] = other_role
-        line = f"{battle[f'{role}_username']} forfeited. {battle[f'{other_role}_username']} wins the battle."
+        line = f"{battle.get(f'{role}_username', 'Player')} forfeited. {battle.get(f'{other_role}_username', 'Opponent')} wins the battle."
         state["last_round"] = [line]
+        if "log" not in state:
+            state["log"] = []
         state["log"].append(line)
 
-        winner_creature_id = state[other_role]["id"]
-        loser_creature_id = state[role]["id"]
-        _attach_rewards(state, winner_creature_id, loser_creature_id)
-        winner_user_id = battle["challenger_id"] if other_role == "challenger" else battle["opponent_id"]
+        winner_combatant = state.get(other_role)
+        loser_combatant = state.get(role)
+        
+        if winner_combatant and loser_combatant:
+            winner_creature_id = winner_combatant.get("id")
+            loser_creature_id = loser_combatant.get("id")
+            _attach_rewards(state, winner_creature_id, loser_creature_id)
+            
+        winner_user_id = battle.get("challenger_id") if other_role == "challenger" else battle.get("opponent_id")
 
         connection.execute(
             """

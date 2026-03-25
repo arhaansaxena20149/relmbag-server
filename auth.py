@@ -1,31 +1,16 @@
 from __future__ import annotations
-
-try:
-    import requests
-except ModuleNotFoundError:  # pragma: no cover
-    import http_client as requests
-
-SERVER_URL = "https://relmbag-server.onrender.com"
-
-import sqlite3
-
 import bcrypt
-
-import database
 from config import EMAIL_PATTERN, USERNAME_PATTERN
-
+from network import safe_request, safe_json
 
 class AuthError(ValueError):
     pass
 
-
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
-
 def verify_password(password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
-
 
 def _parse_server_message(payload: dict | None, response) -> str:
     if payload:
@@ -34,40 +19,35 @@ def _parse_server_message(payload: dict | None, response) -> str:
             return message
     return getattr(response, "text", "") or ""
 
-
 def _fetch_user_meta_by_username(username: str) -> dict | None:
     try:
-        response = requests.get(f"{SERVER_URL}/users", timeout=10)
-        if not response.ok:
-            return None
-        payload = response.json()
+        response = safe_request("get", "users")
+        payload = safe_json(response)
         if not isinstance(payload, list):
             return None
         username_norm = username.strip().lower()
         for user in payload:
             if isinstance(user, dict) and str(user.get("username", "")).strip().lower() == username_norm:
                 return user
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch user by username: {e}")
         return None
     return None
 
-
 def _fetch_user_meta_by_email(email: str) -> dict | None:
     try:
-        response = requests.get(f"{SERVER_URL}/users", timeout=10)
-        if not response.ok:
-            return None
-        payload = response.json()
+        response = safe_request("get", "users")
+        payload = safe_json(response)
         if not isinstance(payload, list):
             return None
         email_norm = email.strip().lower()
         for user in payload:
             if isinstance(user, dict) and str(user.get("email", "")).strip().lower() == email_norm:
                 return user
-    except Exception:
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch user by email: {e}")
         return None
     return None
-
 
 def signup_user(email: str, real_name: str, username: str, password: str) -> dict:
     clean_email = email.strip().lower()
@@ -85,69 +65,52 @@ def signup_user(email: str, real_name: str, username: str, password: str) -> dic
         raise AuthError("Password must be at least 8 characters.")
 
     try:
-        response = requests.post(
-            f"{SERVER_URL}/signup",
+        print(f"[DEBUG] Attempting to sign up user: {clean_username} at {clean_email}")
+        response = safe_request(
+            "post",
+            "signup",
             json={
                 "email": clean_email,
                 "real_name": clean_real_name,
                 "username": clean_username,
                 "password": clean_password,
             },
-            timeout=10,
         )
-        payload = None
-        try:
-            payload = response.json()
-        except Exception:
-            payload = None
-
-        payload_dict = payload if isinstance(payload, dict) else None
-        status_value = payload_dict.get("status") if isinstance(payload_dict, dict) else None
-
-        # Some servers return HTTP 200 but `{status: "error"}`.
-        if not response.ok or status_value != "success":
-            message = ""
-            if isinstance(payload_dict, dict):
-                message = str(
-                    payload_dict.get("message")
-                    or payload_dict.get("error")
-                    or payload_dict.get("detail")
-                    or payload_dict.get("reason")
-                    or ""
-                )
-            message = (message or _parse_server_message(payload, response)).lower()
-
-            if "email" in message and ("already" in message or "registered" in message or "exists" in message):
+        print(f"[DEBUG] Signup response status: {response.status_code}")
+        payload = safe_json(response)
+        
+        if not payload or payload.get("status") != "success":
+            message = _parse_server_message(payload, response)
+            print(f"[DEBUG] Signup failed for user: {clean_username}, reason: {message}")
+            message_lower = message.lower()
+            if "email" in message_lower and ("already" in message_lower or "registered" in message_lower or "exists" in message_lower):
                 raise AuthError("That email is already registered.")
-            if any(word in message for word in ("username", "user")) and any(
-                word in message for word in ("taken", "already", "exists")
+            if any(word in message_lower for word in ("username", "user")) and any(
+                word in message_lower for word in ("taken", "already", "exists")
             ):
                 raise AuthError("That username is already taken.")
-            if "exists" in message:
-                # Ambiguous duplicate (email or username).
-                raise AuthError("That username is already taken.")
+            raise AuthError(message or "Could not create the account.")
 
-            print(
-                f"[auth] /signup failed status={getattr(response, 'status_code', None)} payload_status={status_value!r} message={message!r}"
-            )
-            raise AuthError("Could not create the account.")
-
-        tokens = 0
-        if isinstance(payload, dict):
-            tokens = int(payload.get("tokens", 0) or 0)
-
+        print(f"[DEBUG] Signup successful for user: {clean_username}")
+        
+        # Fallback to username if id is missing (old server compatibility)
+        user_username = payload.get("username") or clean_username
+        user_id = payload.get("id") or user_username
         return {
-            "id": clean_username,
-            "username": clean_username,
-            "real_name": clean_real_name,
-            "email": clean_email,
-            "tokens": tokens,
+            "id": user_id,
+            "username": user_username,
+            "real_name": payload.get("real_name", clean_real_name),
+            "email": payload.get("email", clean_email),
+            "tokens": int(payload.get("tokens", 0) or 0),
+            "session_token": payload.get("session_token"),
         }
     except AuthError:
         raise
     except Exception as error:
-        raise AuthError("Could not create the account.") from error
-
+        print(f"[ERROR] An unexpected error occurred during signup: {error}")
+        if "Connection" in str(error) or "Timeout" in str(error):
+            raise AuthError("Could not reach the server. Check your connection.") from error
+        raise AuthError(f"Could not create the account: {error}") from error
 
 def login_user(identifier: str, password: str) -> dict:
     clean_identifier = identifier.strip()
@@ -156,52 +119,37 @@ def login_user(identifier: str, password: str) -> dict:
         raise AuthError("Enter your username or email and password.")
 
     try:
-        username = clean_identifier
-        meta: dict | None = None
-
-        # Server login endpoint accepts username only, but UI supports username or email.
-        if "@" in clean_identifier and EMAIL_PATTERN.match(clean_identifier.lower()):
-            meta = _fetch_user_meta_by_email(clean_identifier)
-            if meta is None:
-                raise AuthError("Invalid credentials.")
-            username = meta.get("username")
-            if not isinstance(username, str) or not username.strip():
-                raise AuthError("Invalid credentials.")
-
-        response = requests.post(
-            f"{SERVER_URL}/login",
-            json={"username": username, "password": clean_password},
-            timeout=10,
+        print(f"[DEBUG] Attempting to log in user: {clean_identifier}")
+        
+        response = safe_request(
+            "post",
+            "login",
+            json={"username": clean_identifier, "password": clean_password},
         )
+        payload = safe_json(response)
 
-        payload = None
-        try:
-            payload = response.json()
-        except Exception:
-            payload = None
-
-        if not response.ok or not isinstance(payload, dict) or payload.get("status") != "success":
-            print(
-                f"[auth] /login failed status={getattr(response, 'status_code', None)} message={_parse_server_message(payload, response)!r}"
-            )
+        if not payload or payload.get("status") != "success":
+            print(f"[DEBUG] Login failed for user: {clean_identifier}")
             raise AuthError("Invalid credentials.")
 
-        tokens = int(payload.get("tokens", 0) or 0)
-
-        if meta is None:
-            meta = _fetch_user_meta_by_username(username)
-
-        real_name = meta.get("real_name") if isinstance(meta, dict) else ""
-        email_value = meta.get("email") if isinstance(meta, dict) else ""
-
+        print(f"[DEBUG] Login successful for user: {payload.get('username')}")
+        
+        # Fallback to username if id is missing (old server compatibility)
+        user_username = payload.get("username") or clean_username
+        user_id = payload.get("id") or user_username
         return {
-            "id": username,
-            "username": username,
-            "real_name": real_name,
-            "email": email_value,
-            "tokens": tokens,
+            "id": user_id,
+            "username": user_username,
+            "real_name": payload.get("real_name", ""),
+            "email": payload.get("email", ""),
+            "tokens": int(payload.get("tokens", 0) or 0),
+            "session_token": payload.get("session_token"),
         }
     except AuthError:
         raise
     except Exception as error:
+        print(f"[ERROR] An unexpected error occurred during login: {error}")
+        # Be more descriptive about network errors
+        if "Connection" in str(error) or "Timeout" in str(error):
+            raise AuthError("Could not reach the server. Check your connection.") from error
         raise AuthError("Invalid credentials.") from error

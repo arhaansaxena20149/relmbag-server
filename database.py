@@ -50,7 +50,8 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
 
 
 def _create_schema(connection: sqlite3.Connection) -> None:
-    connection.executescript(
+    # Ensure users table has all required columns first
+    connection.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,9 +61,24 @@ def _create_schema(connection: sqlite3.Connection) -> None:
             password_hash TEXT NOT NULL,
             tokens INTEGER NOT NULL DEFAULT 0 CHECK(tokens >= 0),
             last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            is_banned INTEGER NOT NULL DEFAULT 0,
+            session_token TEXT
         );
+        """
+    )
+    
+    # Backfill missing columns if table already existed (migration)
+    user_columns = {row["name"] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
+    if "is_banned" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER NOT NULL DEFAULT 0")
+    if "session_token" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN session_token TEXT")
+    if "password" in user_columns and "password_hash" not in user_columns:
+        connection.execute("ALTER TABLE users RENAME COLUMN password TO password_hash")
 
+    connection.executescript(
+        """
         CREATE TABLE IF NOT EXISTS owned_creatures (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -122,10 +138,18 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         """
     )
 
-    # Backfill for older DBs that may have missed the last_seen column.
+    # Backfill for older DBs that may have missed columns or used old names.
     user_columns = {row["name"] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
     if "last_seen" not in user_columns:
         connection.execute("ALTER TABLE users ADD COLUMN last_seen TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP")
+    if "password" in user_columns and "password_hash" not in user_columns:
+        connection.execute("ALTER TABLE users RENAME COLUMN password TO password_hash")
+    if "real_name" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN real_name TEXT NOT NULL DEFAULT 'Player'")
+    if "is_banned" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER NOT NULL DEFAULT 0")
+    if "session_token" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN session_token TEXT")
 
 
 def fetch_one(query: str, params: Iterable[Any] = ()) -> dict | None:
@@ -165,10 +189,18 @@ def get_user_by_email(email: str) -> dict | None:
 
 
 def get_user_by_identifier(identifier: str) -> dict | None:
-    return fetch_one(
+    # Check for both password and password_hash to handle incomplete migrations.
+    user = fetch_one(
         "SELECT * FROM users WHERE username = ? COLLATE NOCASE OR email = ? COLLATE NOCASE",
         (identifier, identifier),
     )
+    if user:
+        user_dict = dict(user)
+        # Ensure 'password_hash' key exists if the server expects it.
+        if "password" in user_dict and "password_hash" not in user_dict:
+            user_dict["password_hash"] = user_dict["password"]
+        return user_dict
+    return None
 
 
 def list_other_users(current_user_id: int | None = None) -> list[dict]:
@@ -180,19 +212,18 @@ def list_other_users(current_user_id: int | None = None) -> list[dict]:
     )
 
 
-def list_admin_players(within_seconds: int = 90) -> list[dict]:
+def list_admin_players(within_seconds: int = 120) -> list[dict]:
+    # Use a slightly larger window for 'online' status to account for network lag.
     return fetch_all(
         f"""
         SELECT
             u.*,
-            COUNT(oc.id) AS creature_count,
+            (SELECT COUNT(*) FROM owned_creatures oc WHERE oc.user_id = u.id) AS creature_count,
             CASE
-                WHEN DATETIME(u.last_seen) >= DATETIME('now', '-{within_seconds} seconds') THEN 1
+                WHEN u.last_seen IS NOT NULL AND DATETIME(u.last_seen) >= DATETIME('now', '-{within_seconds} seconds') THEN 1
                 ELSE 0
             END AS is_online
         FROM users u
-        LEFT JOIN owned_creatures oc ON oc.user_id = u.id
-        GROUP BY u.id
         ORDER BY is_online DESC, u.username COLLATE NOCASE
         """
     )
@@ -261,16 +292,50 @@ def set_user_tokens(user_id: int, tokens: int) -> int:
     return tokens
 
 
-def adjust_user_tokens(user_id: int, delta: int) -> int:
+def adjust_user_tokens(user_id: int | str, delta: int) -> int:
     with transaction() as connection:
-        row = connection.execute("SELECT tokens FROM users WHERE id = ?", (user_id,)).fetchone()
+        row = connection.execute("SELECT tokens FROM users WHERE id = ? OR username = ?", (user_id, user_id)).fetchone()
         if row is None:
             raise ValueError("User not found.")
         next_balance = row["tokens"] + delta
         if next_balance < 0:
             raise ValueError("Token balance cannot be negative.")
-        connection.execute("UPDATE users SET tokens = ? WHERE id = ?", (next_balance, user_id))
+        connection.execute("UPDATE users SET tokens = ? WHERE id = ? OR username = ?", (next_balance, user_id, user_id))
         return int(next_balance)
+
+
+def ban_user(user_id: int, is_banned: bool = True) -> None:
+    with transaction() as connection:
+        connection.execute(
+            "UPDATE users SET is_banned = ?, session_token = NULL WHERE id = ?",
+            (1 if is_banned else 0, user_id),
+        )
+
+
+def kick_user(user_id: int) -> None:
+    with transaction() as connection:
+        connection.execute("UPDATE users SET session_token = NULL WHERE id = ?", (user_id,))
+
+
+def update_user_session_token(user_id: int, session_token: str | None) -> None:
+    with transaction() as connection:
+        connection.execute("UPDATE users SET session_token = ? WHERE id = ?", (session_token, user_id))
+
+
+def reset_user_password(user_id: int | str, new_password_hash: str) -> None:
+    with transaction() as connection:
+        # Determine if we are using an ID or a Username
+        if isinstance(user_id, int) or (isinstance(user_id, str) and user_id.isdigit()):
+            where_clause = "WHERE id = ?"
+        else:
+            where_clause = "WHERE username = ? COLLATE NOCASE"
+
+        # Update both possible column names to ensure it sticks regardless of migration state
+        user_columns = {row["name"] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
+        if "password_hash" in user_columns:
+            connection.execute(f"UPDATE users SET password_hash = ? {where_clause}", (new_password_hash, user_id))
+        if "password" in user_columns:
+            connection.execute(f"UPDATE users SET password = ? {where_clause}", (new_password_hash, user_id))
 
 
 def get_creature_by_id(creature_id: int) -> dict | None:

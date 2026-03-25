@@ -1,27 +1,16 @@
 from __future__ import annotations
-
 import random
-
-try:
-    import requests
-except ModuleNotFoundError:  # pragma: no cover
-    import http_client as requests
-
-SERVER_URL = "https://relmbag-server.onrender.com"
-
+from network import safe_request, safe_json
 from config import CRATE_COST, CREATURES_BY_RARITY, DROP_RATES, RARITY_ORDER
 from inventory import enrich_creature
 from sprite_loader import get_sprite_path
 
-
 class CrateError(ValueError):
     pass
 
-
 def roll_rarity(rng: random.Random | None = None) -> str:
     generator = rng or random
-    return generator.choices(RARITY_ORDER, weights=[DROP_RATES[rarity] for rarity in RARITY_ORDER], k=1)[0]
-
+    return generator.choices(RARITY_ORDER, weights=[DROP_RATES.get(rarity, 0) for rarity in RARITY_ORDER], k=1)[0]
 
 def grant_creature(user_id: int, creature_key: str, level: int = 1, rng: random.Random | None = None) -> dict:
     from config import CREATURE_CATALOG, slugify
@@ -30,54 +19,57 @@ def grant_creature(user_id: int, creature_key: str, level: int = 1, rng: random.
     candidate_key = creature_key
     if candidate_key not in CREATURE_CATALOG:
         candidate_key = slugify(str(candidate_key))
-    template = CREATURE_CATALOG[candidate_key]
+    
+    # FIX: Defensive check for creature template
+    template = CREATURE_CATALOG.get(candidate_key)
+    if not template:
+        print(f"[ERROR] Creature key '{candidate_key}' not found in catalog.")
+        return {}
+
     value_roll = round(generator.uniform(0.90, 1.10), 4)
     creature_payload = {
-        # `id` is only used by UI selection and local/offline systems; server treats identity as username.
         "id": int(generator.random() * 1_000_000_000),
         "user_id": user_id,
-        "creature_key": template["key"],
-        "creature_name": template["name"],
-        "rarity": template["rarity"],
-        "image_path": str(get_sprite_path(template["key"])),
+        "creature_key": template.get("key"),
+        "creature_name": template.get("name"),
+        "rarity": template.get("rarity"),
+        "image_path": str(get_sprite_path(template.get("key"))),
         "level": level,
         "xp": 0,
         "value_roll": value_roll,
     }
     return enrich_creature(creature_payload)
 
-
 def open_crate(user_id: int, rng: random.Random | None = None) -> dict:
     generator = rng or random
     username = str(user_id)
 
     try:
-        response = requests.post(f"{SERVER_URL}/open_crate", json={"username": username}, timeout=10)
+        print(f"[DEBUG] Attempting to open crate for user: {username}")
+        response = safe_request("post", "open_crate", json={"username": username})
+        payload = safe_json(response)
     except Exception as error:
+        print(f"[ERROR] Failed to open crate for user {username}: {error}")
         raise CrateError("Could not open crate.") from error
 
-    payload = None
-    try:
-        payload = response.json()
-    except Exception:
-        payload = None
-
-    if not response.ok or not isinstance(payload, dict) or payload.get("status") != "success":
+    if not payload or payload.get("status") != "success":
         message = ""
         if isinstance(payload, dict):
             message = str(payload.get("error") or payload.get("message") or payload.get("detail") or "")
         message_l = message.lower()
+        print(f"[DEBUG] Crate opening failed for user {username}, reason: {message}")
         if response.status_code == 404 or "user" in message_l and "not found" in message_l:
             raise CrateError("User not found.")
         if "not enough tokens" in message_l or ("tokens" in message_l and "not" in message_l and "enough" in message_l):
             raise CrateError("Not enough tokens.")
         raise CrateError(message.strip() or "Could not open crate.")
 
+    print(f"[DEBUG] Crate opened successfully for user: {username}")
     rarity = payload.get("rarity")
     creature_key = payload.get("creature")
-    level_provided = payload.get("level", None) is not None
-    xp_provided = payload.get("xp", None) is not None
-    value_roll_provided = payload.get("value_roll", None) is not None
+    level_provided = payload.get("level") is not None
+    xp_provided = payload.get("xp") is not None
+    value_roll_provided = payload.get("value_roll") is not None
 
     level = int(payload.get("level", 1) or 1)
     xp = int(payload.get("xp", 0) or 0)
@@ -88,23 +80,31 @@ def open_crate(user_id: int, rng: random.Random | None = None) -> dict:
     if not creature_key:
         # If `creature` isn't included, attempt to infer from rarity (best-effort).
         rarity = rarity or roll_rarity(generator)
-        template = generator.choice(CREATURES_BY_RARITY[rarity])
-        creature_key = template["key"]
-        rarity = template["rarity"]
+        # FIX: Defensive check for rarity in catalog
+        available_templates = CREATURES_BY_RARITY.get(rarity)
+        if not available_templates:
+            print(f"[ERROR] No templates found for rarity '{rarity}'.")
+            raise CrateError("Failed to determine creature template.")
+        template = generator.choice(available_templates)
+        creature_key = template.get("key")
+        rarity = template.get("rarity")
 
     from config import CREATURE_CATALOG, slugify
 
     candidate_key = creature_key
     if candidate_key not in CREATURE_CATALOG:
         candidate_key = slugify(str(candidate_key))
-    template = CREATURE_CATALOG[candidate_key]
+    
+    # FIX: Defensive check for creature template
+    template = CREATURE_CATALOG.get(candidate_key)
+    if not template:
+        print(f"[ERROR] Creature key '{candidate_key}' not found in catalog.")
+        raise CrateError("Failed to determine creature template.")
 
-    # If the server omitted creature stats in the crate response, look up the
-    # creature in the user's inventory and use the best match we can.
     if not (level_provided and xp_provided and value_roll_provided):
         try:
-            inv_resp = requests.get(f"{SERVER_URL}/inventory/{username}", timeout=10)
-            inv_payload = inv_resp.json() if inv_resp.ok else None
+            inv_resp = safe_request("get", f"inventory/{username}")
+            inv_payload = safe_json(inv_resp)
             if isinstance(inv_payload, list) and candidate_key:
                 best_score: tuple[int, int] | None = None
                 best_match: dict | None = None
@@ -130,7 +130,8 @@ def open_crate(user_id: int, rng: random.Random | None = None) -> dict:
                     level = int(best_match.get("level", level) or level)
                     xp = int(best_match.get("xp", xp) or xp)
                     value_roll = float(best_match.get("value_roll", value_roll) or value_roll)
-        except Exception:
+        except Exception as e:
+            print(f"[ERROR] Failed to fetch inventory during crate opening fallback: {e}")
             pass
 
     creature_payload = {

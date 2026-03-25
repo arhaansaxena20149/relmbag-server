@@ -13,24 +13,28 @@ def _load_trade(connection, trade_id: int):
 
 
 def _participant_side(trade, user_id: int) -> tuple[str, str, int]:
-    if trade["initiator_id"] == user_id:
-        return "initiator_tokens", "initiator_confirmed", trade["recipient_id"]
-    if trade["recipient_id"] == user_id:
-        return "recipient_tokens", "recipient_confirmed", trade["initiator_id"]
+    # FIX: Defensive dictionary access
+    if not trade:
+        raise TradeError("Trade data is missing.")
+        
+    if trade.get("initiator_id") == user_id:
+        return "initiator_tokens", "initiator_confirmed", trade.get("recipient_id")
+    if trade.get("recipient_id") == user_id:
+        return "recipient_tokens", "recipient_confirmed", trade.get("initiator_id")
     raise TradeError("You are not part of this trade.")
 
 
 def _assert_trade_open(trade) -> None:
     if trade is None:
         raise TradeError("Trade not found.")
-    if trade["status"] != "open":
+    if trade.get("status") != "open":
         raise TradeError("This trade is no longer open.")
 
 
 def _assert_trade_pending(trade) -> None:
     if trade is None:
         raise TradeError("Trade not found.")
-    if trade["status"] != "pending":
+    if trade.get("status") != "pending":
         raise TradeError("This trade request is no longer pending.")
 
 
@@ -48,14 +52,18 @@ def _reset_confirmations(connection, trade_id: int) -> None:
 
 
 def _validate_trade_state(connection, trade) -> None:
+    initiator_id = trade.get("initiator_id")
+    recipient_id = trade.get("recipient_id")
+    
     participants = connection.execute(
         "SELECT id, tokens FROM users WHERE id IN (?, ?)",
-        (trade["initiator_id"], trade["recipient_id"]),
+        (initiator_id, recipient_id),
     ).fetchall()
     balances = {row["id"]: row["tokens"] for row in participants}
-    if balances.get(trade["initiator_id"], 0) < trade["initiator_tokens"]:
+    
+    if balances.get(initiator_id, 0) < trade.get("initiator_tokens", 0):
         raise TradeError("Initiator no longer has enough tokens.")
-    if balances.get(trade["recipient_id"], 0) < trade["recipient_tokens"]:
+    if balances.get(recipient_id, 0) < trade.get("recipient_tokens", 0):
         raise TradeError("Recipient no longer has enough tokens.")
 
     offered = connection.execute(
@@ -65,7 +73,7 @@ def _validate_trade_state(connection, trade) -> None:
         JOIN owned_creatures oc ON oc.id = tc.creature_id
         WHERE tc.trade_id = ?
         """,
-        (trade["id"],),
+        (trade.get("id"),),
     ).fetchall()
 
     for row in offered:
@@ -74,8 +82,8 @@ def _validate_trade_state(connection, trade) -> None:
 
 
 def _calculate_trade_totals(initiator_creatures: list[dict], recipient_creatures: list[dict], trade: dict) -> dict:
-    initiator_value = sum(creature["value"] for creature in initiator_creatures) + trade["initiator_tokens"]
-    recipient_value = sum(creature["value"] for creature in recipient_creatures) + trade["recipient_tokens"]
+    initiator_value = sum(creature.get("value", 0) for creature in initiator_creatures) + trade.get("initiator_tokens", 0)
+    recipient_value = sum(creature.get("value", 0) for creature in recipient_creatures) + trade.get("recipient_tokens", 0)
     high = max(initiator_value, recipient_value, 1)
     delta = abs(initiator_value - recipient_value) / high
     if delta <= 0.10:
@@ -95,14 +103,21 @@ def _trade_snapshot(connection, trade_id: int, viewer_id: int | None = None) -> 
     if trade_row is None:
         raise TradeError("Trade not found.")
 
+    initiator_id = trade_row.get("initiator_id")
+    recipient_id = trade_row.get("recipient_id")
+
     initiator = connection.execute(
         "SELECT id, username FROM users WHERE id = ?",
-        (trade_row["initiator_id"],),
+        (initiator_id,),
     ).fetchone()
     recipient = connection.execute(
         "SELECT id, username FROM users WHERE id = ?",
-        (trade_row["recipient_id"],),
+        (recipient_id,),
     ).fetchone()
+    
+    if initiator is None or recipient is None:
+        raise TradeError("Trade participants not found.")
+
     offered = connection.execute(
         """
         SELECT tc.user_id AS offered_by_user_id, oc.*
@@ -117,54 +132,57 @@ def _trade_snapshot(connection, trade_id: int, viewer_id: int | None = None) -> 
     initiator_creatures = [
         enrich_creature(dict(row))
         for row in offered
-        if row["offered_by_user_id"] == trade_row["initiator_id"]
+        if row["offered_by_user_id"] == initiator_id
     ]
     recipient_creatures = [
         enrich_creature(dict(row))
         for row in offered
-        if row["offered_by_user_id"] == trade_row["recipient_id"]
+        if row["offered_by_user_id"] == recipient_id
     ]
     fairness = _calculate_trade_totals(initiator_creatures, recipient_creatures, dict(trade_row))
 
     snapshot = {
-        "id": trade_row["id"],
-        "status": trade_row["status"],
+        "id": trade_row.get("id"),
+        "status": trade_row.get("status"),
         "initiator": {
-            "id": initiator["id"],
-            "username": initiator["username"],
-            "tokens": trade_row["initiator_tokens"],
-            "confirmed": bool(trade_row["initiator_confirmed"]),
+            "id": initiator.get("id"),
+            "username": initiator.get("username"),
+            "tokens": trade_row.get("initiator_tokens", 0),
+            "confirmed": bool(trade_row.get("initiator_confirmed")),
             "creatures": initiator_creatures,
         },
         "recipient": {
-            "id": recipient["id"],
-            "username": recipient["username"],
-            "tokens": trade_row["recipient_tokens"],
-            "confirmed": bool(trade_row["recipient_confirmed"]),
+            "id": recipient.get("id"),
+            "username": recipient.get("username"),
+            "tokens": trade_row.get("recipient_tokens", 0),
+            "confirmed": bool(trade_row.get("recipient_confirmed")),
             "creatures": recipient_creatures,
         },
         "fairness": fairness,
-        "created_at": trade_row["created_at"],
-        "updated_at": trade_row["updated_at"],
+        "created_at": trade_row.get("created_at"),
+        "updated_at": trade_row.get("updated_at"),
     }
 
     if viewer_id is not None:
-        if snapshot["initiator"]["id"] == viewer_id:
+        initiator_data = snapshot.get("initiator")
+        recipient_data = snapshot.get("recipient")
+        
+        if initiator_data and initiator_data.get("id") == viewer_id:
             viewer_role = "initiator"
-            snapshot["your_side"] = snapshot["initiator"]
-            snapshot["their_side"] = snapshot["recipient"]
-        elif snapshot["recipient"]["id"] == viewer_id:
+            snapshot["your_side"] = initiator_data
+            snapshot["their_side"] = recipient_data
+        elif recipient_data and recipient_data.get("id") == viewer_id:
             viewer_role = "recipient"
-            snapshot["your_side"] = snapshot["recipient"]
-            snapshot["their_side"] = snapshot["initiator"]
+            snapshot["your_side"] = recipient_data
+            snapshot["their_side"] = initiator_data
         else:
             raise TradeError("You are not part of this trade.")
         snapshot["viewer_role"] = viewer_role
-        snapshot["can_accept"] = trade_row["status"] == "pending" and viewer_role == "recipient"
-        snapshot["can_decline"] = trade_row["status"] == "pending" and viewer_role == "recipient"
-        snapshot["can_cancel_request"] = trade_row["status"] == "pending" and viewer_role == "initiator"
-        snapshot["can_edit_offer"] = trade_row["status"] == "open"
-        snapshot["can_confirm"] = trade_row["status"] == "open"
+        snapshot["can_accept"] = trade_row.get("status") == "pending" and viewer_role == "recipient"
+        snapshot["can_decline"] = trade_row.get("status") == "pending" and viewer_role == "recipient"
+        snapshot["can_cancel_request"] = trade_row.get("status") == "pending" and viewer_role == "initiator"
+        snapshot["can_edit_offer"] = trade_row.get("status") == "open"
+        snapshot["can_confirm"] = trade_row.get("status") == "open"
 
     return snapshot
 
@@ -244,18 +262,18 @@ def create_trade(initiator_id: int, recipient_username: str) -> dict:
               )
             LIMIT 1
             """,
-            (initiator_id, recipient["id"], recipient["id"], initiator_id),
+            (initiator_id, recipient.get("id"), recipient.get("id"), initiator_id),
         ).fetchone()
 
         if existing is not None:
-            trade_id = existing["id"]
+            trade_id = existing.get("id")
         else:
             cursor = connection.execute(
                 """
                 INSERT INTO trades (initiator_id, recipient_id, status)
                 VALUES (?, ?, 'pending')
                 """,
-                (initiator_id, recipient["id"]),
+                (initiator_id, recipient.get("id")),
             )
             trade_id = int(cursor.lastrowid)
         return _trade_snapshot(connection, trade_id, initiator_id)
@@ -270,7 +288,7 @@ def accept_trade_request(trade_id: int, user_id: int) -> dict:
     with database.transaction() as connection:
         trade = _load_trade(connection, trade_id)
         _assert_trade_pending(trade)
-        if trade["recipient_id"] != user_id:
+        if trade.get("recipient_id") != user_id:
             raise TradeError("Only the recipient can accept this trade request.")
         connection.execute(
             """
@@ -288,7 +306,7 @@ def decline_trade_request(trade_id: int, user_id: int) -> None:
     with database.transaction() as connection:
         trade = _load_trade(connection, trade_id)
         _assert_trade_pending(trade)
-        if trade["recipient_id"] != user_id:
+        if trade.get("recipient_id") != user_id:
             raise TradeError("Only the recipient can decline this trade request.")
         connection.execute(
             """
@@ -312,7 +330,7 @@ def set_trade_tokens(trade_id: int, user_id: int, token_amount: int) -> dict:
         user = connection.execute("SELECT tokens FROM users WHERE id = ?", (user_id,)).fetchone()
         if user is None:
             raise TradeError("User not found.")
-        if token_amount > user["tokens"]:
+        if token_amount > user.get("tokens", 0):
             raise TradeError("You do not have that many tokens.")
 
         connection.execute(

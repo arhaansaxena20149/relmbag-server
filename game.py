@@ -1,35 +1,7 @@
 from __future__ import annotations
-
-import threading
-import time
-
-
-def start_heartbeat(username):
-    def loop():
-        while True:
-            try:
-                requests.post(f"{SERVER_URL}/heartbeat", json={
-                    "username": username
-                })
-            except:
-                pass
-            time.sleep(5)
-
-    threading.Thread(target=loop, daemon=True).start()
-
-
-
 import sys
 from functools import partial
-
-try:
-    import requests
-except ModuleNotFoundError:  # pragma: no cover
-    import http_client as requests
-
-SERVER_URL = "https://relmbag-server.onrender.com"
-
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThreadPool
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QApplication,
@@ -56,14 +28,14 @@ from PyQt5.QtWidgets import (
 )
 
 import auth
-import combat
 import crate_system
 import database
 import inventory
-import trading
+import api
 from config import APP_ICON_PNG, APP_SUBTITLE, APP_TITLE, BASE_VALUES, CRATE_COST, DROP_RATES, RARITY_COLORS, RARITY_ORDER
 from ui_shared import APP_STYLESHEET, apply_fade_in, load_pixmap, with_alpha
-
+from workers import Worker, HeartbeatWorker
+from api import get_users
 
 def clear_layout(layout) -> None:
     while layout.count():
@@ -349,26 +321,33 @@ class AuthPage(QWidget):
         return widget
 
     def handle_login(self) -> None:
-        try:
-            user = auth.login_user(self.login_identifier.text(), self.login_password.text())
-        except auth.AuthError as error:
-            status_message(self.login_status, str(error), "#F47C7C")
-            return
-        status_message(self.login_status, "Login successful.", "#63D471")
-        self.authenticated.emit(user)
+        self.login_status.setText("Logging in...")
+        self.login_status.setStyleSheet("color: #F2C14E;")
+        
+        # FIX: Move login to a worker thread to prevent UI freeze
+        worker = Worker(auth.login_user, self.login_identifier.text(), self.login_password.text())
+        worker.signals.finished.connect(self._on_auth_success)
+        worker.signals.error.connect(lambda e: status_message(self.login_status, str(e), "#F47C7C"))
+        QThreadPool.globalInstance().start(worker)
 
     def handle_signup(self) -> None:
-        try:
-            user = auth.signup_user(
-                self.signup_email.text(),
-                self.signup_real_name.text(),
-                self.signup_username.text(),
-                self.signup_password.text(),
-            )
-        except auth.AuthError as error:
-            status_message(self.signup_status, str(error), "#F47C7C")
-            return
-        status_message(self.signup_status, "Account created. You are now signed in.", "#63D471")
+        self.signup_status.setText("Creating account...")
+        self.signup_status.setStyleSheet("color: #F2C14E;")
+
+        # FIX: Move signup to a worker thread to prevent UI freeze
+        worker = Worker(
+            auth.signup_user,
+            self.signup_email.text(),
+            self.signup_real_name.text(),
+            self.signup_username.text(),
+            self.signup_password.text(),
+        )
+        worker.signals.finished.connect(self._on_auth_success)
+        worker.signals.error.connect(lambda e: status_message(self.signup_status, str(e), "#F47C7C"))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_auth_success(self, user: dict) -> None:
+        print(f"[DEBUG] Authentication successful for user: {user.get('username')}")
         self.authenticated.emit(user)
 
 
@@ -440,11 +419,21 @@ class DashboardPage(BasePage):
         user = self.game_window.current_user
         if not user:
             return
-        summary = inventory.get_inventory_summary(user["username"])
-        self.welcome_label.setText(f"Welcome back, {user['username']}")
-        self.creature_count[1].setText(str(summary["count"]))
-        self.total_value[1].setText(str(summary["total_value"]))
-        self.highest_rarity[1].setText(summary["highest_rarity"])
+        
+        # FIX: Move inventory summary to worker thread
+        worker = Worker(inventory.get_inventory_summary, user.get("username"))
+        worker.signals.finished.connect(self._on_summary_fetched)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_summary_fetched(self, summary: dict) -> None:
+        user = self.game_window.current_user
+        if not user or not isinstance(summary, dict):
+            return
+        
+        self.welcome_label.setText(f"Welcome back, {user.get('username', 'Player')}")
+        self.creature_count[1].setText(str(summary.get("count", 0)))
+        self.total_value[1].setText(str(summary.get("total_value", 0)))
+        self.highest_rarity[1].setText(summary.get("highest_rarity", "None"))
 
 
 class CratePage(BasePage):
@@ -580,37 +569,55 @@ class CratePage(BasePage):
             self._finish_roll()
 
     def _finish_roll(self) -> None:
-        try:
-            result = crate_system.open_crate(self.game_window.current_user["username"])
-        except crate_system.CrateError as error:
-            status_message(self.feedback_label, str(error), "#F47C7C")
+        user = self.game_window.current_user
+        if not user:
+            return
+        
+        # FIX: Move network call to worker thread to prevent UI freeze
+        worker = Worker(crate_system.open_crate, user.get("username"))
+        worker.signals.finished.connect(self._on_crate_opened)
+        worker.signals.error.connect(lambda e: status_message(self.feedback_label, str(e), "#F47C7C"))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_crate_opened(self, result: dict) -> None:
+        if not isinstance(result, dict):
+            return
+        
+        creature = result.get("creature")
+        if not creature:
             return
 
-        creature = result["creature"]
         self.game_window.refresh_session()
-        self.result_image.setPixmap(load_pixmap(creature["image_path"], 180))
+        self.result_image.setPixmap(load_pixmap(creature.get("image_path"), 180))
+        
+        rarity_color = creature.get("rarity_color", "#FFFFFF")
         self.result_panel.setStyleSheet(
-            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {with_alpha(creature['rarity_color'], 68)}, stop:1 #142236); "
-            f"border: 1px solid {with_alpha(creature['rarity_color'], 205)}; border-radius: 18px;"
+            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {with_alpha(rarity_color, 68)}, stop:1 #142236); "
+            f"border: 1px solid {with_alpha(rarity_color, 205)}; border-radius: 18px;"
         )
-        self.result_rarity.setText(creature["rarity"])
-        self.result_rarity.setStyleSheet(rarity_badge_stylesheet(creature["rarity_color"]))
-        self.result_name.setText(creature["display_name"])
-        self.result_name.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {creature['rarity_color']};")
+        
+        rarity = creature.get("rarity", "Common")
+        self.result_rarity.setText(rarity)
+        self.result_rarity.setStyleSheet(rarity_badge_stylesheet(rarity_color))
+        
+        display_name = creature.get("display_name", "Unknown")
+        self.result_name.setText(display_name)
+        self.result_name.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {rarity_color};")
+        
         self.result_meta.setText(
-            f"Summon Chance: {DROP_RATES[creature['rarity']]}%  |  Level {creature['level']}  |  Trade Value {creature['value']}\n"
-            f"Remaining Tokens: {result['remaining_tokens']}  |  Crate Cost: {result['crate_cost']}"
+            f"Summon Chance: {DROP_RATES.get(rarity, 0)}%  |  Level {creature.get('level', 1)}  |  Trade Value {creature.get('value', 0)}\n"
+            f"Remaining Tokens: {result.get('remaining_tokens', 0)}  |  Crate Cost: {result.get('crate_cost', 0)}"
         )
         self.result_stats.setText(
             "Combat Stats\n"
             f"{creature_stat_row(creature)}\n"
-            f"Unlocked Moves: {', '.join(move['name'] for move in creature['moves'] if move['unlocked'])}"
+            f"Unlocked Moves: {', '.join(move.get('name', 'move') for move in creature.get('moves', []) if move.get('unlocked'))}"
         )
         self.result_glow.setText(
-            f"You summoned a {creature['rarity']} creature. Sprite, rarity, and drop chance stay visible here after every pull."
+            f"You summoned a {rarity} creature. Sprite, rarity, and drop chance stay visible here after every pull."
         )
         self.result_glow.setStyleSheet(
-            f"background: {with_alpha(creature['rarity_color'], 70)}; border: 1px solid {with_alpha(creature['rarity_color'], 190)}; "
+            f"background: {with_alpha(rarity_color, 70)}; border: 1px solid {with_alpha(rarity_color, 190)}; "
             "border-radius: 14px; padding: 8px 10px; font-weight: 700;"
         )
         status_message(self.feedback_label, "Crate opened successfully.", "#63D471")
@@ -700,12 +707,28 @@ class InventoryPage(BasePage):
         user = self.game_window.current_user
         if user is None:
             return
+        
         sort_map = {"Rarity": "rarity", "Value": "value", "Level": "level"}
         rarity_filter = self.filter_combo.currentText()
         selected_filter = None if rarity_filter == "All" else rarity_filter
-        creatures = inventory.get_inventory(user["username"], sort_by=sort_map[self.sort_combo.currentText()], rarity_filter=selected_filter)
-        self.current_creatures = {creature["id"]: creature for creature in creatures}
-        total_value = sum(creature["value"] for creature in creatures)
+        
+        # FIX: Move inventory fetching to worker thread to prevent UI freeze
+        worker = Worker(
+            inventory.get_inventory,
+            user.get("username"),
+            sort_by=sort_map.get(self.sort_combo.currentText(), "rarity"),
+            rarity_filter=selected_filter
+        )
+        worker.signals.finished.connect(self._on_inventory_fetched)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_inventory_fetched(self, creatures: list[dict]) -> None:
+        if not isinstance(creatures, list):
+            return
+            
+        self.current_creatures = {creature.get("id"): creature for creature in creatures if creature.get("id") is not None}
+        total_value = sum(creature.get("value", 0) for creature in creatures)
+        
         self.inventory_summary.setText(
             f"{len(creatures)} creature{'s' if len(creatures) != 1 else ''} shown  |  Total Value {total_value}"
         )
@@ -722,11 +745,11 @@ class InventoryPage(BasePage):
         for index, creature in enumerate(creatures):
             card = CreatureCard(creature)
             card.clicked.connect(self.select_creature)
-            self.current_cards[creature["id"]] = card
+            self.current_cards[creature.get("id")] = card
             self.grid_layout.addWidget(card, index // 4, index % 4)
 
         if self.selected_creature_id not in self.current_creatures:
-            self.selected_creature_id = creatures[0]["id"]
+            self.selected_creature_id = creatures[0].get("id")
         self.select_creature(self.selected_creature_id)
 
     def _clear_details(self) -> None:
@@ -774,6 +797,62 @@ class InventoryPage(BasePage):
 
 
 class TradingPage(BasePage):
+    def _populate_online_players(self) -> None:
+        user = self.game_window.current_user
+        if user is None:
+            return
+
+        # FIX: Move network call to worker thread to prevent UI freeze
+        worker = Worker(get_users)
+        worker.signals.finished.connect(self._on_users_fetched)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_users_fetched(self, users: list[dict]) -> None:
+        user = self.game_window.current_user
+        if user is None:
+            return
+
+        print(f"[DEBUG] TradingPage received {len(users)} users from server.")
+        clear_layout(self.online_layout)
+
+        # FIX: Defensive programming, use .get()
+        online_players = []
+        for u in users:
+            if not isinstance(u, dict):
+                continue
+            username = u.get("username")
+            is_online = bool(u.get("online") or u.get("is_online"))
+            
+            # Debug log for each other user
+            if username and username != user.get("username"):
+                print(f"[DEBUG] Other User: {username}, is_online: {is_online}")
+
+            if username and username != user.get("username") and is_online:
+                online_players.append({
+                    "username": username,
+                    "creature_count": u.get("creature_count") or inventory.get_inventory_count(username)
+                })
+
+        print(f"[DEBUG] Total other online players found: {len(online_players)}")
+        if not online_players:
+            empty = QLabel("No other players are online.")
+            empty.setObjectName("mutedText")
+            self.online_layout.addWidget(empty)
+            return
+
+        for u in online_players:
+            self.online_layout.addWidget(
+                PlayerActionCard(
+                    username=u["username"],
+                    creature_count=u["creature_count"],
+                    accent="#58C96B",
+                    button_text="Trade",
+                    on_click=partial(self.create_trade, u["username"]),
+                )
+            )
+
+        self.online_layout.addStretch(1)
+    
     def __init__(self, game_window: "GameWindow") -> None:
         super().__init__(game_window)
         self.current_trade_id: int | None = None
@@ -930,26 +1009,36 @@ class TradingPage(BasePage):
         if user is None:
             return
         self._populate_online_players()
-        trades = trading.list_user_trades(user["id"])
+        
+        # FIX: Move trade list fetching to worker thread
+        worker = Worker(api.list_user_trades, user.get("id"))
+        worker.signals.finished.connect(self._on_trade_list_fetched)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_trade_list_fetched(self, trades: list[dict]) -> None:
+        if not isinstance(trades, list):
+            return
+            
         self.trade_list.blockSignals(True)
         self.trade_list.clear()
         selected_row = 0
         for index, trade_row in enumerate(trades):
-            if trade_row["status"] == "pending":
-                direction = "Incoming" if trade_row["direction"] == "incoming" else "Sent"
-            elif trade_row["status"] == "open":
+            status = trade_row.get("status")
+            if status == "pending":
+                direction = "Incoming" if trade_row.get("direction") == "incoming" else "Sent"
+            elif status == "open":
                 direction = "Active"
             else:
-                direction = trade_row["status"].title()
-            item = QListWidgetItem(f"{direction}  |  {trade_row['counterpart_username']}")
-            item.setData(Qt.UserRole, trade_row["id"])
+                direction = str(status).title()
+            item = QListWidgetItem(f"{direction}  |  {trade_row.get('counterpart_username', 'Unknown')}")
+            item.setData(Qt.UserRole, trade_row.get("id"))
             self.trade_list.addItem(item)
-            if trade_row["id"] == self.current_trade_id:
+            if trade_row.get("id") == self.current_trade_id:
                 selected_row = index
         self.trade_list.blockSignals(False)
 
-        incoming_count = sum(1 for trade_row in trades if trade_row["status"] == "pending" and trade_row["direction"] == "incoming")
-        active_count = sum(1 for trade_row in trades if trade_row["status"] == "open")
+        incoming_count = sum(1 for trade_row in trades if trade_row.get("status") == "pending" and trade_row.get("direction") == "incoming")
+        active_count = sum(1 for trade_row in trades if trade_row.get("status") == "open")
         status_message(
             self.trade_banner,
             f"{incoming_count} incoming request{'s' if incoming_count != 1 else ''}  |  {active_count} active trade{'s' if active_count != 1 else ''}",
@@ -957,8 +1046,8 @@ class TradingPage(BasePage):
         )
 
         if trades:
-            if self.current_trade_id not in {row["id"] for row in trades}:
-                self.current_trade_id = trades[0]["id"]
+            if self.current_trade_id not in {row.get("id") for row in trades}:
+                self.current_trade_id = trades[0].get("id")
                 selected_row = 0
             self.trade_list.setCurrentRow(selected_row)
             self.load_trade_snapshot()
@@ -966,42 +1055,21 @@ class TradingPage(BasePage):
             self.current_trade_id = None
             self.current_snapshot = None
             self.clear_trade_display()
-
-    def _populate_online_players(self) -> None:
+            
+    def create_trade(self, recipient_username: str) -> None:
         user = self.game_window.current_user
         if user is None:
             return
-        clear_layout(self.online_layout)
-        online_players = database.list_online_users(user["id"])
-        if not online_players:
-            empty = QLabel("No other players are online right now. Open a second player window or have another player log in.")
-            empty.setWordWrap(True)
-            empty.setObjectName("mutedText")
-            self.online_layout.addWidget(empty)
-            return
 
-        for player in online_players:
-            self.online_layout.addWidget(
-                PlayerActionCard(
-                    username=player["username"],
-                    creature_count=player["creature_count"],
-                    accent="#58C96B",
-                    button_text="Trade",
-                    on_click=partial(self.create_trade, player["username"]),
-                )
-            )
-        self.online_layout.addStretch(1)
+        worker = Worker(api.create_trade, user.get("id"), recipient_username)
+        worker.signals.finished.connect(self._on_trade_created)
+        worker.signals.error.connect(lambda e: show_error(self, str(e)))
+        QThreadPool.globalInstance().start(worker)
 
-    def create_trade(self, username: str) -> None:
-        user = self.game_window.current_user
-        if user is None:
+    def _on_trade_created(self, snapshot: dict) -> None:
+        if not isinstance(snapshot, dict):
             return
-        try:
-            snapshot = trading.create_trade(user["id"], username)
-        except trading.TradeError as error:
-            show_error(self, str(error))
-            return
-        self.current_trade_id = snapshot["id"]
+        self.current_trade_id = snapshot.get("id")
         self.refresh_page()
 
     def on_trade_selected(self) -> None:
@@ -1015,12 +1083,31 @@ class TradingPage(BasePage):
         if self.current_trade_id is None:
             self.clear_trade_display()
             return
-        try:
-            self.current_snapshot = trading.get_trade(self.current_trade_id, self.game_window.current_user["id"])
-        except trading.TradeError as error:
-            show_error(self, str(error))
+            
+        # FIX: Move DB/Network call to worker thread to prevent UI freeze
+        # We fetch both the trade and the user's inventory for the selector
+        def get_trade_and_inventory(trade_id: int, user_id: int, username: str):
+            snapshot = api.get_trade(trade_id, user_id)
+            user_inventory = inventory.get_inventory(username, sort_by="rarity")
+            return snapshot, user_inventory
+
+        worker = Worker(
+            get_trade_and_inventory,
+            self.current_trade_id,
+            self.game_window.current_user.get("id"),
+            self.game_window.current_user.get("username")
+        )
+        worker.signals.finished.connect(self._on_trade_data_fetched)
+        worker.signals.error.connect(lambda e: show_error(self, str(e)))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_trade_data_fetched(self, data: tuple) -> None:
+        if not isinstance(data, tuple) or len(data) != 2:
             self.current_snapshot = None
+            self.clear_trade_display()
             return
+            
+        self.current_snapshot, self.user_inventory = data
         self.render_snapshot()
 
     def clear_trade_display(self) -> None:
@@ -1041,115 +1128,164 @@ class TradingPage(BasePage):
         if snapshot is None:
             self.clear_trade_display()
             return
-        your_side = snapshot["your_side"]
-        their_side = snapshot["their_side"]
-        self.trade_header.setText(f"Trade with {their_side['username']}")
+            
+        your_side = snapshot.get("your_side")
+        their_side = snapshot.get("their_side")
+        if not your_side or not their_side:
+            return
+
+        self.trade_header.setText(f"Trade with {their_side.get('username', 'Opponent')}")
         self.trade_status.setText(self._describe_trade(snapshot))
-        self.offer_tokens.setMaximum(self.game_window.current_user["tokens"])
-        self.offer_tokens.setValue(your_side["tokens"])
-        self.your_offer_title.setText(f"Your Offer ({'Confirmed' if your_side['confirmed'] else 'Open'})")
-        self.their_offer_title.setText(f"Their Offer ({'Confirmed' if their_side['confirmed'] else 'Open'})")
+        
+        user_tokens = self.game_window.current_user.get("tokens", 0) if self.game_window.current_user else 0
+        self.offer_tokens.setMaximum(user_tokens)
+        self.offer_tokens.setValue(your_side.get("tokens", 0))
+        
+        self.your_offer_title.setText(f"Your Offer ({'Confirmed' if your_side.get('confirmed') else 'Open'})")
+        self.their_offer_title.setText(f"Their Offer ({'Confirmed' if their_side.get('confirmed') else 'Open'})")
 
-        self.request_panel.setVisible(snapshot["status"] == "pending")
-        self.accept_trade_button.setVisible(snapshot["can_accept"])
-        self.decline_trade_button.setVisible(snapshot["can_decline"])
-        self.cancel_request_button.setVisible(snapshot["can_cancel_request"])
+        status = snapshot.get("status")
+        self.request_panel.setVisible(status == "pending")
+        self.accept_trade_button.setVisible(snapshot.get("can_accept", False))
+        self.decline_trade_button.setVisible(snapshot.get("can_decline", False))
+        self.cancel_request_button.setVisible(snapshot.get("can_cancel_request", False))
 
-        self.offer_panel.setVisible(snapshot["status"] in {"open", "completed"})
-        self.confirm_button.setVisible(snapshot["status"] == "open")
-        self.cancel_trade_button.setVisible(snapshot["status"] == "open")
-        self.inventory_list.setEnabled(snapshot["status"] == "open")
-        self.offer_tokens.setEnabled(snapshot["status"] == "open")
+        self.offer_panel.setVisible(status in {"open", "completed"})
+        self.confirm_button.setVisible(status == "open")
+        self.cancel_trade_button.setVisible(status == "open")
+        self.inventory_list.setEnabled(status == "open")
+        self.offer_tokens.setEnabled(status == "open")
         self.populate_inventory_list()
         self.populate_offer_lists(snapshot)
 
     def _describe_trade(self, snapshot: dict) -> str:
-        your_side = snapshot["your_side"]
-        their_side = snapshot["their_side"]
-        if snapshot["status"] == "pending":
-            if snapshot["can_accept"]:
-                return f"{their_side['username']} wants to trade. Accept to open the trade builder, or decline the request."
-            return f"Trade request sent to {their_side['username']}. Waiting for a response."
-        if snapshot["status"] == "open":
+        your_side = snapshot.get("your_side")
+        their_side = snapshot.get("their_side")
+        if not your_side or not their_side:
+            return "Loading trade data..."
+            
+        status = snapshot.get("status")
+        if status == "pending":
+            if snapshot.get("can_accept"):
+                return f"{their_side.get('username', 'Opponent')} wants to trade. Accept to open the trade builder, or decline the request."
+            return f"Trade request sent to {their_side.get('username', 'Opponent')}. Waiting for a response."
+        
+        if status == "open":
             return (
-                f"You {'have' if your_side['confirmed'] else 'have not'} confirmed. "
-                f"{their_side['username']} {'has' if their_side['confirmed'] else 'has not'} confirmed."
+                f"You {'have' if your_side.get('confirmed') else 'have not'} confirmed. "
+                f"{their_side.get('username', 'Opponent')} {'has' if their_side.get('confirmed') else 'has not'} confirmed."
             )
-        if snapshot["status"] == "completed":
-            return f"Trade completed with {their_side['username']}."
-        if snapshot["status"] == "declined":
-            return f"{their_side['username']} declined this trade request."
+        
+        if status == "completed":
+            return f"Trade completed with {their_side.get('username', 'Opponent')}."
+        
+        if status == "declined":
+            return f"{their_side.get('username', 'Opponent')} declined this trade request."
+            
         return "This trade is no longer active."
 
     def populate_inventory_list(self) -> None:
         self.inventory_list.clear()
-        if self.current_snapshot is None or self.current_snapshot["status"] != "open":
+        if self.current_snapshot is None or self.current_snapshot.get("status") != "open":
             return
-        offered_ids = {creature["id"] for creature in self.current_snapshot["your_side"]["creatures"]}
-        creatures = inventory.get_inventory(self.game_window.current_user["username"], sort_by="rarity")
+        
+        your_side = self.current_snapshot.get("your_side")
+        if not your_side:
+            return
+            
+        offered_ids = {creature.get("id") for creature in your_side.get("creatures", []) if creature.get("id") is not None}
+        
+        # FIX: Use the inventory data fetched by the load_trade_snapshot worker
+        creatures = getattr(self, "user_inventory", [])
+        
         for creature in creatures:
-            suffix = " [OFFERED]" if creature["id"] in offered_ids else ""
+            creature_id = creature.get("id")
+            if creature_id is None:
+                continue
+            suffix = " [OFFERED]" if creature_id in offered_ids else ""
             item = QListWidgetItem(
-                f"{creature['display_name']} | {creature['rarity']} | Lv {creature['level']} | Value {creature['value']}{suffix}"
+                f"{creature.get('display_name')} | {creature.get('rarity')} | Lv {creature.get('level')} | Value {creature.get('value')}{suffix}"
             )
-            item.setData(Qt.UserRole, creature["id"])
+            item.setData(Qt.UserRole, creature_id)
             self.inventory_list.addItem(item)
 
     def populate_offer_lists(self, snapshot: dict) -> None:
-        your_side = snapshot["your_side"]
-        their_side = snapshot["their_side"]
+        your_side = snapshot.get("your_side")
+        their_side = snapshot.get("their_side")
+        if not your_side or not their_side:
+            return
+            
         self.my_offer_list.clear()
         self.their_offer_list.clear()
-        for creature in your_side["creatures"]:
+        
+        for creature in your_side.get("creatures", []):
             item = QListWidgetItem(
-                f"{creature['display_name']} | {creature['rarity']} | Lv {creature['level']} | Value {creature['value']}"
+                f"{creature.get('display_name', 'Unknown')} | {creature.get('rarity', 'Common')} | "
+                f"Lv {creature.get('level', 1)} | Value {creature.get('value', 0)}"
             )
-            item.setData(Qt.UserRole, creature["id"])
+            item.setData(Qt.UserRole, creature.get("id"))
             self.my_offer_list.addItem(item)
-        if your_side["tokens"]:
-            self.my_offer_list.addItem(QListWidgetItem(f"Tokens: {your_side['tokens']}"))
-        for creature in their_side["creatures"]:
+            
+        your_tokens = your_side.get("tokens", 0)
+        if your_tokens:
+            self.my_offer_list.addItem(QListWidgetItem(f"Tokens: {your_tokens}"))
+            
+        for creature in their_side.get("creatures", []):
             self.their_offer_list.addItem(
                 QListWidgetItem(
-                    f"{creature['display_name']} | {creature['rarity']} | Lv {creature['level']} | Value {creature['value']}"
+                    f"{creature.get('display_name', 'Unknown')} | {creature.get('rarity', 'Common')} | "
+                    f"Lv {creature.get('level', 1)} | Value {creature.get('value', 0)}"
                 )
             )
-        if their_side["tokens"]:
-            self.their_offer_list.addItem(QListWidgetItem(f"Tokens: {their_side['tokens']}"))
+            
+        their_tokens = their_side.get("tokens", 0)
+        if their_tokens:
+            self.their_offer_list.addItem(QListWidgetItem(f"Tokens: {their_tokens}"))
 
-        fairness = snapshot["fairness"]
-        self.your_value_label.setText(f"Your Value: {fairness['initiator_value'] if snapshot['initiator']['id'] == self.game_window.current_user['id'] else fairness['recipient_value']}")
-        self.their_value_label.setText(f"Their Value: {fairness['recipient_value'] if snapshot['initiator']['id'] == self.game_window.current_user['id'] else fairness['initiator_value']}")
-        self.fairness_label.setText(f"{fairness['label']} ({fairness['delta_percent']}% difference)")
+        fairness = snapshot.get("fairness", {})
+        initiator_id = snapshot.get("initiator", {}).get("id")
+        user_id = self.game_window.current_user.get("id") if self.game_window.current_user else None
+        
+        your_val = fairness.get("initiator_value", 0) if initiator_id == user_id else fairness.get("recipient_value", 0)
+        their_val = fairness.get("recipient_value", 0) if initiator_id == user_id else fairness.get("initiator_value", 0)
+        
+        self.your_value_label.setText(f"Your Value: {your_val}")
+        self.their_value_label.setText(f"Their Value: {their_val}")
+        
+        label = fairness.get("label", "Fairness")
+        delta = fairness.get("delta_percent", 0)
+        self.fairness_label.setText(f"{label} ({delta}% difference)")
         self.fairness_label.setStyleSheet(
-            f"background: {fairness['color']}; color: #081018; border-radius: 999px; padding: 8px 12px; font-weight: 700;"
+            f"background: {fairness.get('color', '#AEBBD0')}; color: #081018; border-radius: 999px; padding: 8px 12px; font-weight: 700;"
         )
 
     def accept_trade_request(self) -> None:
         if self.current_trade_id is None:
             return
-        try:
-            self.current_snapshot = trading.accept_trade_request(
-                self.current_trade_id,
-                self.game_window.current_user["id"],
-            )
-        except trading.TradeError as error:
-            show_error(self, str(error))
-            return
-        self.render_snapshot()
+        
+        # FIX: Move trade acceptance to worker thread
+        worker = Worker(api.accept_trade_request, self.current_trade_id, self.game_window.current_user.get("id"))
+        worker.signals.finished.connect(self._on_trade_action_success)
+        worker.signals.error.connect(lambda e: show_error(self, str(e)))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_trade_action_success(self, snapshot: dict) -> None:
+        if isinstance(snapshot, dict):
+            self.current_snapshot = snapshot
+            self.render_snapshot()
         self.refresh_page()
 
     def decline_trade_request(self) -> None:
         if self.current_trade_id is None:
             return
-        try:
-            trading.decline_trade_request(
-                self.current_trade_id,
-                self.game_window.current_user["id"],
-            )
-        except trading.TradeError as error:
-            show_error(self, str(error))
-            return
+        
+        # FIX: Move trade decline to worker thread
+        worker = Worker(api.decline_trade_request, self.current_trade_id, self.game_window.current_user.get("id"))
+        worker.signals.finished.connect(lambda _: self._on_trade_declined())
+        worker.signals.error.connect(lambda e: show_error(self, str(e)))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_trade_declined(self) -> None:
         self.current_trade_id = None
         self.refresh_page()
 
@@ -1160,16 +1296,17 @@ class TradingPage(BasePage):
         if item is None:
             show_error(self, "Select a creature from your inventory first.")
             return
-        try:
-            self.current_snapshot = trading.add_creature_to_trade(
-                self.current_trade_id,
-                self.game_window.current_user["id"],
-                item.data(Qt.UserRole),
-            )
-        except trading.TradeError as error:
-            show_error(self, str(error))
-            return
-        self.load_trade_snapshot()
+        
+        # FIX: Move add creature to worker thread
+        worker = Worker(
+            api.add_creature_to_trade,
+            self.current_trade_id,
+            self.game_window.current_user.get("id"),
+            item.data(Qt.UserRole),
+        )
+        worker.signals.finished.connect(self._on_trade_update_success)
+        worker.signals.error.connect(lambda e: show_error(self, str(e)))
+        QThreadPool.globalInstance().start(worker)
 
     def remove_selected_creature(self) -> None:
         if self.current_trade_id is None:
@@ -1178,45 +1315,55 @@ class TradingPage(BasePage):
         if item is None or item.data(Qt.UserRole) is None:
             show_error(self, "Select one of your offered creatures first.")
             return
-        try:
-            self.current_snapshot = trading.remove_creature_from_trade(
-                self.current_trade_id,
-                self.game_window.current_user["id"],
-                item.data(Qt.UserRole),
-            )
-        except trading.TradeError as error:
-            show_error(self, str(error))
-            return
-        self.load_trade_snapshot()
+        
+        # FIX: Move remove creature to worker thread
+        worker = Worker(
+            api.remove_creature_from_trade,
+            self.current_trade_id,
+            self.game_window.current_user.get("id"),
+            item.data(Qt.UserRole),
+        )
+        worker.signals.finished.connect(self._on_trade_update_success)
+        worker.signals.error.connect(lambda e: show_error(self, str(e)))
+        QThreadPool.globalInstance().start(worker)
 
     def update_token_offer(self) -> None:
         if self.current_trade_id is None:
             return
-        try:
-            self.current_snapshot = trading.set_trade_tokens(
-                self.current_trade_id,
-                self.game_window.current_user["id"],
-                self.offer_tokens.value(),
-            )
-        except trading.TradeError as error:
-            show_error(self, str(error))
-            return
-        self.load_trade_snapshot()
+        
+        # FIX: Move update tokens to worker thread
+        worker = Worker(
+            api.set_trade_tokens,
+            self.current_trade_id,
+            self.game_window.current_user.get("id"),
+            self.offer_tokens.value(),
+        )
+        worker.signals.finished.connect(self._on_trade_update_success)
+        worker.signals.error.connect(lambda e: show_error(self, str(e)))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_trade_update_success(self, snapshot: dict) -> None:
+        if isinstance(snapshot, dict):
+            self.current_snapshot = snapshot
+            self.render_snapshot()
 
     def confirm_trade(self) -> None:
         if self.current_trade_id is None:
             return
-        try:
-            self.current_snapshot = trading.confirm_trade(
-                self.current_trade_id,
-                self.game_window.current_user["id"],
-            )
-        except trading.TradeError as error:
-            show_error(self, str(error))
+        
+        # FIX: Move confirm trade to worker thread
+        worker = Worker(api.confirm_trade, self.current_trade_id, self.game_window.current_user.get("id"))
+        worker.signals.finished.connect(self._on_trade_confirmed)
+        worker.signals.error.connect(lambda e: show_error(self, str(e)))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_trade_confirmed(self, snapshot: dict) -> None:
+        if not isinstance(snapshot, dict):
             return
+        self.current_snapshot = snapshot
+        self.render_snapshot()
         self.game_window.refresh_session()
-        self.load_trade_snapshot()
-        if self.current_snapshot["status"] == "completed":
+        if snapshot.get("status") == "completed":
             QMessageBox.information(self, "Trade Complete", "Both sides confirmed. The trade has been executed.")
             self.game_window.pages["inventory"].refresh_page()
             self.game_window.pages["profile"].refresh_page()
@@ -1225,25 +1372,76 @@ class TradingPage(BasePage):
     def cancel_trade(self) -> None:
         if self.current_trade_id is None:
             return
-        try:
-            trading.cancel_trade(self.current_trade_id, self.game_window.current_user["id"])
-        except trading.TradeError as error:
-            show_error(self, str(error))
-            return
-        self.current_trade_id = None
-        self.refresh_page()
+        
+        # FIX: Move cancel trade to worker thread
+        worker = Worker(api.cancel_trade, self.current_trade_id, self.game_window.current_user.get("id"))
+        worker.signals.finished.connect(lambda _: self.refresh_page())
+        worker.signals.error.connect(lambda e: show_error(self, str(e)))
+        QThreadPool.globalInstance().start(worker)
 
 
 class FightingPage(BasePage):
+    def _populate_online_players(self) -> None:
+        user = self.game_window.current_user
+        if user is None:
+            return
+
+        # FIX: Move network call to worker thread to prevent UI freeze
+        worker = Worker(get_users)
+        worker.signals.finished.connect(self._on_users_fetched)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_users_fetched(self, users: list[dict]) -> None:
+        user = self.game_window.current_user
+        if user is None:
+            return
+
+        print(f"[DEBUG] FightingPage received {len(users)} users from server.")
+        clear_layout(self.online_battle_layout)
+
+        # FIX: Defensive programming, use .get()
+        online_players = []
+        for u in users:
+            if not isinstance(u, dict):
+                continue
+            username = u.get("username")
+            is_online = bool(u.get("online") or u.get("is_online"))
+            
+            # Debug log for each other user
+            if username and username != user.get("username"):
+                print(f"[DEBUG] Other User: {username}, is_online: {is_online}")
+
+            if username and username != user.get("username") and is_online:
+                online_players.append({
+                    "username": username,
+                    "creature_count": u.get("creature_count") or inventory.get_inventory_count(username)
+                })
+
+        print(f"[DEBUG] Total other online players found: {len(online_players)}")
+        if not online_players:
+            empty = QLabel("No other players are online right now.")
+            empty.setWordWrap(True)
+            empty.setObjectName("mutedText")
+            self.online_battle_layout.addWidget(empty)
+            return
+
+        for player in online_players:
+            self.online_battle_layout.addWidget(
+                PlayerActionCard(
+                    username=player["username"],
+                    creature_count=player["creature_count"],
+                    accent="#58C96B",
+                    button_text="Challenge",
+                    on_click=partial(self.create_battle, player["username"]),
+                )
+            )
+
+        self.online_battle_layout.addStretch(1)
+
     def __init__(self, game_window: "GameWindow") -> None:
         super().__init__(game_window)
         self.current_battle_id: int | None = None
         self.current_snapshot: dict | None = None
-
-        self.poll_timer = QTimer(self)
-        self.poll_timer.setInterval(2500)
-        self.poll_timer.timeout.connect(self.poll_updates)
-        self.poll_timer.start()
 
         root = QVBoxLayout(self)
         root.setSpacing(18)
@@ -1376,6 +1574,7 @@ class FightingPage(BasePage):
         body.addWidget(detail_panel, 2)
         root.addLayout(body)
 
+     
     def _combatant_panel(self, heading: str) -> tuple[QFrame, QLabel, QLabel, QProgressBar, QLabel, QLabel]:
         panel = QFrame()
         panel.setObjectName("panel")
@@ -1401,21 +1600,38 @@ class FightingPage(BasePage):
         return panel, image, name, hp_bar, hp_text, stats
 
     def refresh_page(self) -> None:
-        self.game_window.refresh_session()
-        self._load_user_creatures()
-        self._populate_online_players()
-        self._refresh_battle_list()
+        user = self.game_window.current_user
+        if user is None:
+            return
+
+        def _get_page_data(user_id: int, username: str):
+            users = get_users()
+            creatures = inventory.get_inventory(username, sort_by="rarity")
+            battles = api.list_user_battles(user_id)
+            return users, creatures, battles
+
+        worker = Worker(_get_page_data, user.get("id"), user.get("username"))
+        worker.signals.finished.connect(self._on_page_data_fetched)
+        QThreadPool.globalInstance().start(worker)
+
+    def _set_battle_status(self, message: str, color: str) -> None:
+        status_message(self.battle_status, message, color)
+
+    def _on_page_data_fetched(self, data: tuple) -> None:
+        if not isinstance(data, tuple) or len(data) != 3:
+            return
+        users, creatures, battles = data
+        self._on_users_fetched(users)
+        self._on_user_creatures_fetched(creatures)
+        self._on_battle_list_fetched(battles)
+
         if self.current_battle_id is not None:
             self.load_battle_snapshot()
         else:
             self.clear_battle_display()
         self._set_battle_status("Choose a creature, then challenge someone from the online list.", "#9FB0C8")
 
-    def _load_user_creatures(self) -> None:
-        user = self.game_window.current_user
-        if user is None:
-            return
-        creatures = inventory.get_inventory(user["username"], sort_by="rarity")
+    def _on_user_creatures_fetched(self, creatures: list[dict]) -> None:
         self.challenge_creature_combo.clear()
         self.accept_creature_combo.clear()
         for creature in creatures:
@@ -1426,66 +1642,39 @@ class FightingPage(BasePage):
                 creature["id"],
             )
 
-    def _populate_online_players(self) -> None:
-        user = self.game_window.current_user
-        if user is None:
+    
+    def _on_battle_list_fetched(self, battles: list[dict]) -> None:
+        if not isinstance(battles, list):
             return
-        clear_layout(self.online_battle_layout)
-        online_players = database.list_online_users(user["id"])
-        if not online_players:
-            empty = QLabel("No opponents are online right now. Open another player window or wait for another login.")
-            empty.setWordWrap(True)
-            empty.setObjectName("mutedText")
-            self.online_battle_layout.addWidget(empty)
-            return
-
-        for player in online_players:
-            self.online_battle_layout.addWidget(
-                PlayerActionCard(
-                    username=player["username"],
-                    creature_count=player["creature_count"],
-                    accent="#44A4FF",
-                    button_text="Battle",
-                    on_click=partial(self.create_battle, player["username"]),
-                )
-            )
-        self.online_battle_layout.addStretch(1)
-
-    def _refresh_battle_list(self) -> None:
-        user = self.game_window.current_user
-        if user is None:
-            return
-        battles = combat.list_user_battles(user["id"])
+            
         selected_index = 0
         self.battle_list.blockSignals(True)
         self.battle_list.clear()
         for index, battle in enumerate(battles):
-            if battle["status"] == "pending":
-                relation = "Incoming" if battle["direction"] == "incoming" else "Sent"
-            elif battle["status"] == "active":
+            status = battle.get("status")
+            if status == "pending":
+                relation = "Incoming" if battle.get("direction") == "incoming" else "Sent"
+            elif status == "active":
                 relation = "Active"
             else:
-                relation = battle["status"].title()
-            item = QListWidgetItem(f"{relation}  |  {battle['counterpart_username']}")
-            item.setData(Qt.UserRole, battle["id"])
+                relation = str(status).title()
+            item = QListWidgetItem(f"{relation}  |  {battle.get('counterpart_username', 'Unknown')}")
+            item.setData(Qt.UserRole, battle.get("id"))
             self.battle_list.addItem(item)
-            if battle["id"] == self.current_battle_id:
+            if battle.get("id") == self.current_battle_id:
                 selected_index = index
         self.battle_list.blockSignals(False)
 
-        available_ids = {battle["id"] for battle in battles}
+        available_ids = {battle.get("id") for battle in battles}
         if battles:
             if self.current_battle_id not in available_ids:
-                self.current_battle_id = battles[0]["id"]
+                self.current_battle_id = battles[0].get("id")
                 selected_index = 0
             self.battle_list.setCurrentRow(selected_index)
         else:
             self.current_battle_id = None
 
-    def _set_battle_status(self, text: str, color: str) -> None:
-        status_message(self.battle_status, text, color)
-
-    def create_battle(self, username: str) -> None:
+    def create_battle(self, opponent_username: str) -> None:
         user = self.game_window.current_user
         if user is None:
             return
@@ -1493,15 +1682,18 @@ class FightingPage(BasePage):
         if creature_id is None:
             self._set_battle_status("You need at least one creature to challenge another player.", "#F47C7C")
             return
-        try:
-            snapshot = combat.create_battle(user["id"], username, creature_id)
-        except combat.CombatError as error:
-            self._set_battle_status(str(error), "#F47C7C")
-            return
-        self.current_battle_id = snapshot["id"]
-        self._refresh_battle_list()
-        self.load_battle_snapshot()
-        self._set_battle_status("Battle challenge sent.", "#63D471")
+
+        worker = Worker(api.create_battle, user.get("id"), opponent_username, creature_id)
+        worker.signals.finished.connect(self._on_battle_created)
+        worker.signals.error.connect(lambda e: self._set_battle_status(str(e), "#F47C7C"))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_battle_created(self, snapshot: dict) -> None:
+        if isinstance(snapshot, dict):
+            self.current_battle_id = snapshot.get("id")
+            self.refresh_page()
+            self.load_battle_snapshot()
+            self._set_battle_status("Battle challenge sent.", "#63D471")
 
     def on_battle_selected(self) -> None:
         item = self.battle_list.currentItem()
@@ -1509,19 +1701,6 @@ class FightingPage(BasePage):
             return
         self.current_battle_id = item.data(Qt.UserRole)
         self.load_battle_snapshot()
-
-    def load_battle_snapshot(self) -> None:
-        if self.current_battle_id is None:
-            self.clear_battle_display()
-            return
-        try:
-            self.current_snapshot = combat.get_battle(self.current_battle_id, self.game_window.current_user["id"])
-        except combat.CombatError as error:
-            self.current_snapshot = None
-            self.clear_battle_display()
-            self._set_battle_status(str(error), "#F47C7C")
-            return
-        self.render_snapshot()
 
     def clear_battle_display(self) -> None:
         self.current_snapshot = None
@@ -1547,33 +1726,38 @@ class FightingPage(BasePage):
             stats.setText("Stats")
             return
 
-        image_path = creature_data["image_path"] if creature_data else state["image_path"]
-        display_name = creature_data["display_name"] if creature_data else state["name"]
-        rarity = creature_data["rarity"] if creature_data else state["rarity"]
-        level = creature_data["level"] if creature_data else state["level"]
-        rarity_color = creature_data["rarity_color"] if creature_data else RARITY_COLORS[rarity]
+        # FIX: Defensive dictionary access
+        image_path = creature_data.get("image_path") if creature_data else state.get("image_path")
+        display_name = creature_data.get("display_name") if creature_data else state.get("name", "Unknown")
+        rarity = creature_data.get("rarity") if creature_data else state.get("rarity", "Common")
+        level = creature_data.get("level") if creature_data else state.get("level", 1)
+        rarity_color = creature_data.get("rarity_color") if creature_data else RARITY_COLORS.get(rarity, "#FFFFFF")
 
         image.setPixmap(load_pixmap(image_path, 140))
         name.setText(f"{display_name} | {rarity} | Lv {level}")
         name.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {rarity_color};")
 
         if state:
-            hp_bar.setMaximum(state["max_hp"])
-            hp_bar.setValue(state["current_hp"])
-            hp_bar.setFormat(f"{state['current_hp']} / {state['max_hp']}")
-            stat_block = state["stats"]
-            hp_value = state["current_hp"]
-            max_hp = state["max_hp"]
+            max_hp = state.get("max_hp", 100)
+            curr_hp = state.get("current_hp", 0)
+            hp_bar.setMaximum(max_hp)
+            hp_bar.setValue(curr_hp)
+            hp_bar.setFormat(f"{curr_hp} / {max_hp}")
+            stat_block = state.get("stats", {})
+            hp_value = curr_hp
         else:
-            hp_bar.setMaximum(creature_data["stats"]["HP"])
-            hp_bar.setValue(creature_data["stats"]["HP"])
-            hp_bar.setFormat(f"{creature_data['stats']['HP']} / {creature_data['stats']['HP']}")
-            stat_block = creature_data["stats"]
-            hp_value = creature_data["stats"]["HP"]
-            max_hp = creature_data["stats"]["HP"]
+            base_hp = creature_data.get("stats", {}).get("HP", 100)
+            hp_bar.setMaximum(base_hp)
+            hp_bar.setValue(base_hp)
+            hp_bar.setFormat(f"{base_hp} / {base_hp}")
+            stat_block = creature_data.get("stats", {})
+            hp_value = base_hp
+            max_hp = base_hp
+        
         hp_text.setText("Hit Points")
         stats.setText(
-            f"HP {hp_value}/{max_hp}  |  Attack {stat_block['Attack']}  |  Defense {stat_block['Defense']}  |  Speed {stat_block['Speed']}"
+            f"HP {hp_value}/{max_hp}  |  Attack {stat_block.get('Attack', 0)}  |  "
+            f"Defense {stat_block.get('Defense', 0)}  |  Speed {stat_block.get('Speed', 0)}"
         )
 
     def render_snapshot(self) -> None:
@@ -1582,26 +1766,39 @@ class FightingPage(BasePage):
             self.clear_battle_display()
             return
 
-        your_side = snapshot["your_side"]
-        their_side = snapshot["their_side"]
-        self.battle_header.setText(f"Battle with {their_side['username']}")
+        your_side = snapshot.get("your_side")
+        their_side = snapshot.get("their_side")
+        if not your_side or not their_side:
+            return
+
+        self.battle_header.setText(f"Battle with {their_side.get('username')}")
         self.battle_meta.setText(self._describe_snapshot(snapshot))
-        self.pending_panel.setVisible(snapshot["status"] == "pending")
-        self.accept_creature_combo.setEnabled(snapshot["can_accept"])
-        self.accept_button.setVisible(snapshot["can_accept"])
-        self.cancel_button.setVisible(snapshot["can_cancel"])
-        self.moves_panel.setVisible(snapshot["status"] == "active")
-        self.forfeit_button.setVisible(snapshot["can_forfeit"])
-        self._render_side(self.player_panel, your_side["creature"], your_side["combatant"])
-        self._render_side(self.opponent_panel, their_side["creature"], their_side["combatant"])
-        self.log_box.setPlainText("\n".join(snapshot["log"]))
+        self.pending_panel.setVisible(snapshot.get("status") == "pending")
+        self.accept_creature_combo.setEnabled(snapshot.get("can_accept"))
+        
+        # Populate creatures for acceptance (if needed)
+        self.accept_creature_combo.clear()
+        creatures = getattr(self, "user_inventory", [])
+        for creature in creatures:
+            self.accept_creature_combo.addItem(
+                f"{creature.get('display_name')} | {creature.get('rarity')} | Lv {creature.get('level')}",
+                creature.get("id")
+            )
+
+        self.accept_button.setVisible(snapshot.get("can_accept"))
+        self.cancel_button.setVisible(snapshot.get("can_cancel"))
+        self.moves_panel.setVisible(snapshot.get("status") == "active")
+        self.forfeit_button.setVisible(snapshot.get("can_forfeit"))
+        self._render_side(self.player_panel, your_side.get("creature"), your_side.get("combatant"))
+        self._render_side(self.opponent_panel, their_side.get("creature"), their_side.get("combatant"))
+        self.log_box.setPlainText("\n".join(snapshot.get("log", [])))
         self.log_box.verticalScrollBar().setValue(self.log_box.verticalScrollBar().maximum())
         self._update_move_buttons()
 
     def _update_move_buttons(self) -> None:
-        move_options = self.current_snapshot["your_move_options"] if self.current_snapshot else []
-        pending_move = self.current_snapshot["your_pending_move"] if self.current_snapshot else None
-        active = bool(self.current_snapshot and self.current_snapshot["can_submit_moves"])
+        move_options = self.current_snapshot.get("your_move_options", []) if self.current_snapshot else []
+        pending_move = self.current_snapshot.get("your_pending_move") if self.current_snapshot else None
+        active = bool(self.current_snapshot and self.current_snapshot.get("can_submit_moves"))
 
         if not move_options:
             for button in self.move_buttons:
@@ -1616,32 +1813,41 @@ class FightingPage(BasePage):
                 continue
 
             move = move_options[index]
-            suffix = "Ready" if move["available"] else f"Ready in {move['remaining_cooldown']}"
+            suffix = "Ready" if move.get("available") else f"Ready in {move.get('remaining_cooldown', 0)}"
             button = self.move_buttons[index]
-            button.setText(f"{move['name']}\nDMG {move['damage']} | CD {move['cooldown']} | {suffix}")
-            button.setEnabled(active and pending_move is None and move["available"])
+            button.setText(f"{move.get('name', 'Move')}\nDMG {move.get('damage', 0)} | CD {move.get('cooldown', 0)} | {suffix}")
+            button.setEnabled(active and pending_move is None and move.get("available", False))
 
     def _describe_snapshot(self, snapshot: dict) -> str:
-        their_side = snapshot["their_side"]
-        if snapshot["status"] == "pending":
-            if snapshot["can_accept"]:
+        their_side = snapshot.get("their_side")
+        if not their_side:
+            return "Loading battle data..."
+            
+        status = snapshot.get("status")
+        if status == "pending":
+            if snapshot.get("can_accept"):
                 return (
-                    f"Incoming battle request from {their_side['username']}. "
+                    f"Incoming battle request from {their_side.get('username', 'Opponent')}. "
                     "Choose one creature to represent you, then accept or decline."
                 )
-            return f"Battle request sent to {their_side['username']}. Waiting for them to lock in one creature."
-        if snapshot["status"] == "active":
-            if snapshot["your_pending_move"]:
-                return f"You locked in {snapshot['your_pending_move']}. Waiting for {their_side['username']}."
-            if snapshot["their_move_submitted"]:
-                return f"{their_side['username']} is ready. Choose your move for round {snapshot['round_number'] + 1}."
-            return f"Round {snapshot['round_number'] + 1}. Both players choose a move."
-        if snapshot["status"] == "completed":
-            if snapshot["you_won"] is True:
-                return f"Battle complete. You defeated {their_side['username']}."
-            if snapshot["you_won"] is False:
-                return f"Battle complete. {their_side['username']} won this battle."
+            return f"Battle request sent to {their_side.get('username', 'Opponent')}. Waiting for them to lock in one creature."
+        
+        if status == "active":
+            pending_move = snapshot.get("your_pending_move")
+            if pending_move:
+                return f"You locked in {pending_move}. Waiting for {their_side.get('username', 'Opponent')}."
+            if snapshot.get("their_move_submitted"):
+                return f"{their_side.get('username', 'Opponent')} is ready. Choose your move for round {snapshot.get('round_number', 0) + 1}."
+            return f"Round {snapshot.get('round_number', 0) + 1}. Both players choose a move."
+        
+        if status == "completed":
+            you_won = snapshot.get("you_won")
+            if you_won is True:
+                return f"Battle complete. You defeated {their_side.get('username', 'Opponent')}."
+            if you_won is False:
+                return f"Battle complete. {their_side.get('username', 'Opponent')} won this battle."
             return "Battle complete."
+            
         return "This battle is no longer active."
 
     def accept_battle(self) -> None:
@@ -1651,55 +1857,58 @@ class FightingPage(BasePage):
         if creature_id is None:
             self._set_battle_status("You need a creature to accept the battle.", "#F47C7C")
             return
-        try:
-            self.current_snapshot = combat.accept_battle(
-                self.current_battle_id,
-                self.game_window.current_user["id"],
-                creature_id,
-            )
-        except combat.CombatError as error:
-            self._set_battle_status(str(error), "#F47C7C")
-            return
-        self.render_snapshot()
-        self._set_battle_status("Battle accepted. Both players can choose moves now.", "#63D471")
+        
+        # FIX: Move battle acceptance to worker thread
+        worker = Worker(api.accept_battle, self.current_battle_id, self.game_window.current_user.get("id"), creature_id)
+        worker.signals.finished.connect(self._on_battle_accepted)
+        worker.signals.error.connect(lambda e: self._set_battle_status(str(e), "#F47C7C"))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_battle_accepted(self, snapshot: dict) -> None:
+        if isinstance(snapshot, dict):
+            self.current_snapshot = snapshot
+            self.render_snapshot()
+            self._set_battle_status("Battle accepted. Both players can choose moves now.", "#63D471")
 
     def cancel_battle(self) -> None:
         if self.current_battle_id is None:
             return
-        try:
-            combat.cancel_battle(self.current_battle_id, self.game_window.current_user["id"])
-        except combat.CombatError as error:
-            self._set_battle_status(str(error), "#F47C7C")
-            return
+        
+        # FIX: Move battle cancellation to worker thread
+        worker = Worker(api.cancel_battle, self.current_battle_id, self.game_window.current_user.get("id"))
+        worker.signals.finished.connect(self._on_battle_cancelled)
+        worker.signals.error.connect(lambda e: self._set_battle_status(str(e), "#F47C7C"))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_battle_cancelled(self, _) -> None:
         self.current_battle_id = None
-        self._refresh_battle_list()
-        if self.current_battle_id is not None:
-            self.load_battle_snapshot()
-        else:
-            self.clear_battle_display()
+        self.refresh_page()
+        self.clear_battle_display()
         self._set_battle_status("Pending challenge removed.", "#F2C14E")
 
     def submit_move(self, index: int) -> None:
         if self.current_snapshot is None or self.current_battle_id is None:
             return
-        move_options = self.current_snapshot["your_move_options"]
+        move_options = self.current_snapshot.get("your_move_options", [])
         if index >= len(move_options):
             return
         move = move_options[index]
-        if not move["available"]:
+        if not move.get("available"):
             return
-        try:
-            self.current_snapshot = combat.submit_move(
-                self.current_battle_id,
-                self.game_window.current_user["id"],
-                move["name"],
-            )
-        except combat.CombatError as error:
-            self._set_battle_status(str(error), "#F47C7C")
+        
+        # FIX: Move move submission to worker thread
+        worker = Worker(api.submit_move, self.current_battle_id, self.game_window.current_user.get("id"), move.get("name"))
+        worker.signals.finished.connect(self._on_move_submitted)
+        worker.signals.error.connect(lambda e: self._set_battle_status(str(e), "#F47C7C"))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_move_submitted(self, snapshot: dict) -> None:
+        if not isinstance(snapshot, dict):
             return
+        self.current_snapshot = snapshot
         self.render_snapshot()
         self._handle_post_battle_updates()
-        if self.current_snapshot["status"] == "active":
+        if snapshot.get("status") == "active":
             self._set_battle_status("Move submitted.", "#63D471")
         else:
             self._set_battle_status("Battle resolved.", "#63D471")
@@ -1707,17 +1916,19 @@ class FightingPage(BasePage):
     def forfeit_battle(self) -> None:
         if self.current_battle_id is None:
             return
-        try:
-            self.current_snapshot = combat.forfeit_battle(
-                self.current_battle_id,
-                self.game_window.current_user["id"],
-            )
-        except combat.CombatError as error:
-            self._set_battle_status(str(error), "#F47C7C")
-            return
-        self.render_snapshot()
-        self._handle_post_battle_updates()
-        self._set_battle_status("You forfeited the battle.", "#F2C14E")
+        
+        # FIX: Move battle forfeit to worker thread
+        worker = Worker(api.forfeit_battle, self.current_battle_id, self.game_window.current_user.get("id"))
+        worker.signals.finished.connect(self._on_battle_forfeited)
+        worker.signals.error.connect(lambda e: self._set_battle_status(str(e), "#F47C7C"))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_battle_forfeited(self, snapshot: dict) -> None:
+        if isinstance(snapshot, dict):
+            self.current_snapshot = snapshot
+            self.render_snapshot()
+            self._handle_post_battle_updates()
+            self._set_battle_status("You forfeited the battle.", "#F2C14E")
 
     def _handle_post_battle_updates(self) -> None:
         if self.current_snapshot and self.current_snapshot["status"] == "completed":
@@ -1725,22 +1936,45 @@ class FightingPage(BasePage):
             self.game_window.pages["inventory"].refresh_page()
             self.game_window.pages["profile"].refresh_page()
             self.game_window.pages["dashboard"].refresh_page()
-            self._refresh_battle_list()
+            self.refresh_page()
 
-    def poll_updates(self) -> None:
-        if not self.isVisible():
-            return
-        if self.game_window.page_stack.currentWidget() is not self:
-            return
-        previous_round = self.current_snapshot["round_number"] if self.current_snapshot else 0
-        previous_status = self.current_snapshot["status"] if self.current_snapshot else None
-        self._refresh_battle_list()
+
+    def load_battle_snapshot(self) -> None:
         if self.current_battle_id is None:
+            self.clear_battle_display()
             return
-        self.load_battle_snapshot()
-        if self.current_snapshot is None:
+            
+        # FIX: Move DB/Network call to worker thread to prevent UI freeze
+        # Fetch both the battle and the user's inventory for the selector
+        def get_battle_and_inventory(battle_id: int, user_id: int, username: str):
+            snapshot = api.get_battle(battle_id, user_id)
+            user_inventory = inventory.get_inventory(username, sort_by="rarity")
+            return snapshot, user_inventory
+
+        worker = Worker(
+            get_battle_and_inventory,
+            self.current_battle_id,
+            self.game_window.current_user.get("id"),
+            self.game_window.current_user.get("username")
+        )
+        worker.signals.finished.connect(self._on_battle_data_fetched)
+        worker.signals.error.connect(lambda e: self._set_battle_status(str(e), "#F47C7C"))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_battle_data_fetched(self, data: tuple) -> None:
+        if not isinstance(data, tuple) or len(data) != 2:
+            self.current_snapshot = None
+            self.clear_battle_display()
             return
-        if self.current_snapshot["round_number"] > previous_round or self.current_snapshot["status"] != previous_status:
+            
+        snapshot, self.user_inventory = data
+        previous_round = self.current_snapshot.get("round_number", 0) if self.current_snapshot else 0
+        previous_status = self.current_snapshot.get("status") if self.current_snapshot else None
+        
+        self.current_snapshot = snapshot
+        self.render_snapshot()
+        
+        if snapshot.get("round_number", 0) > previous_round or snapshot.get("status") != previous_status:
             self._handle_post_battle_updates()
             self._set_battle_status("Battle state updated.", "#63D471")
 
@@ -1793,22 +2027,41 @@ class ProfilePage(BasePage):
         user = self.game_window.current_user
         if user is None:
             return
-        summary = inventory.get_inventory_summary(user["username"])
-        trades = trading.list_user_trades(user["id"])
-        open_trades = sum(1 for trade_row in trades if trade_row["status"] in {"pending", "open"})
-        top_creatures = inventory.get_inventory(user["username"], sort_by="value")[:5]
+            
+        # FIX: Move inventory and trade fetching to worker threads
+        self._fetch_profile_data(user)
 
-        self.username_label.setText(user["username"])
-        self.tokens_label.setText(f"Tokens: {user['tokens']}")
-        self.collection_label.setText(f"Creatures: {summary['count']}")
-        self.value_label.setText(f"Collection Value: {summary['total_value']}")
-        self.rarity_label.setText(f"Highest Rarity: {summary['highest_rarity']}")
+    def _fetch_profile_data(self, user: dict) -> None:
+        # We'll use a single worker that returns a tuple of results for efficiency
+        def get_profile_data(username: str, user_id: int):
+            summary = inventory.get_inventory_summary(username)
+            trades = api.list_user_trades(user_id)
+            top_creatures = inventory.get_inventory(username, sort_by="value")[:5]
+            return summary, trades, top_creatures
+
+        worker = Worker(get_profile_data, user.get("username"), user.get("id"))
+        worker.signals.finished.connect(self._on_profile_data_fetched)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_profile_data_fetched(self, data: tuple) -> None:
+        user = self.game_window.current_user
+        if user is None or not isinstance(data, tuple) or len(data) != 3:
+            return
+            
+        summary, trades, top_creatures = data
+        open_trades = sum(1 for trade_row in trades if trade_row.get("status") in {"pending", "open"})
+
+        self.username_label.setText(user.get("username", "Profile"))
+        self.tokens_label.setText(f"Tokens: {user.get('tokens', 0)}")
+        self.collection_label.setText(f"Creatures: {summary.get('count', 0)}")
+        self.value_label.setText(f"Collection Value: {summary.get('total_value', 0)}")
+        self.rarity_label.setText(f"Highest Rarity: {summary.get('highest_rarity', 'None')}")
         self.trade_label.setText(f"Trade Activity: {open_trades}")
 
         self.top_list.clear()
         for creature in top_creatures:
             self.top_list.addItem(
-                f"{creature['display_name']} | {creature['rarity']} | Lv {creature['level']} | Value {creature['value']}"
+                f"{creature.get('display_name')} | {creature.get('rarity')} | Lv {creature.get('level')} | Value {creature.get('value')}"
             )
 
 
@@ -1822,9 +2075,8 @@ class GameWindow(QMainWindow):
         self.setWindowIcon(QIcon(str(APP_ICON_PNG)))
         self.resize(1520, 940)
 
-        self.presence_timer = QTimer(self)
-        self.presence_timer.setInterval(15000)
-        self.presence_timer.timeout.connect(self._heartbeat)
+        # FIX: Replace unreliable presence_timer with HeartbeatWorker
+        self.heartbeat_worker = None
 
         self.notification_timer = QTimer(self)
         self.notification_timer.setInterval(3500)
@@ -1913,9 +2165,16 @@ class GameWindow(QMainWindow):
         self.seen_trade_notifications.clear()
         self.seen_battle_notifications.clear()
         self.current_user = user
-        start_heartbeat(self.current_user["username"])
+        
+        # FIX: Use HeartbeatWorker
+        if self.heartbeat_worker:
+            self.heartbeat_worker.stop()
+        self.heartbeat_worker = HeartbeatWorker(self.current_user["username"], self.current_user.get("session_token"))
+        self.heartbeat_worker.kicked.connect(self.logout)
+        self.heartbeat_worker.banned.connect(self.logout)
+        self.heartbeat_worker.start()
+
         self.refresh_session()
-        self.presence_timer.start()
         self.notification_timer.start()
         self.root_stack.setCurrentWidget(self.app_shell)
         self.navigate("dashboard")
@@ -1924,51 +2183,50 @@ class GameWindow(QMainWindow):
         if self.current_user is None:
             return
 
-        username = str(self.current_user.get("username", "")).strip()
-        fetched_users: list[dict] = []
-        try:
-            response = requests.get(f"{SERVER_URL}/users", timeout=10)
-            if response.ok:
-                payload = response.json()
-                if isinstance(payload, list):
-                    fetched_users = payload
-        except Exception:
-            fetched_users = []
+        # FIX: Move network calls to a worker thread
+        worker = Worker(get_users)
+        worker.signals.finished.connect(self._on_session_refreshed)
+        QThreadPool.globalInstance().start(worker)
 
-        if fetched_users:
-            user_meta = next(
-                (
-                    user
-                    for user in fetched_users
-                    if isinstance(user, dict)
-                    and str(user.get("username", "")).strip().lower() == username.lower()
-                ),
-                None,
-            )
-            if user_meta is None:
-                self.logout()
-                return
+    def _on_session_refreshed(self, users: list[dict]) -> None:
+        if self.current_user is None:
+            return
 
-            self.current_user["tokens"] = int(user_meta.get("tokens", self.current_user.get("tokens", 0)) or 0)
-            if "real_name" in user_meta:
-                self.current_user["real_name"] = user_meta.get("real_name")
-            if "email" in user_meta:
-                self.current_user["email"] = user_meta.get("email")
+        if not users:
+            print("[DEBUG] User list is empty, skipping session refresh.")
+            return
+
+        username = str(self.current_user.get("username", "")).strip().lower()
+        user_meta = next((u for u in users if str(u.get("username", "")).strip().lower() == username), None)
+
+        if user_meta is None:
+            # Skip update if user is not in the current online list snapshot
+            return
+
+        if user_meta.get("is_banned"):
+            print(f"[DEBUG] User {username} is banned, logging out.")
+            QMessageBox.critical(self, "Banned", "Your account has been banned.")
+            self.logout()
+            return
+
+        self.current_user["tokens"] = int(user_meta.get("tokens", self.current_user.get("tokens", 0)) or 0)
+        self.current_user["real_name"] = user_meta.get("real_name", self.current_user.get("real_name", ""))
+        self.current_user["email"] = user_meta.get("email", self.current_user.get("email", ""))
 
         self.session_label.setText(f"Player: {self.current_user['username']}")
         self.balance_label.setText(f"Tokens: {self.current_user['tokens']}")
 
-        # No "online presence" endpoint is provided by the server, so default to 0.
-        online_count = 0
+        online_count = sum(1 for u in users if u.get("online"))
 
-        # Keep request counters best-effort using the existing local modules.
         try:
-            incoming_trades = len(trading.list_incoming_trade_requests(self.current_user.get("id")))
-        except Exception:
+            incoming_trades = len(api.list_incoming_trade_requests(self.current_user.get("id")))
+        except Exception as e:
+            print(f"[ERROR] Failed to list incoming trades: {e}")
             incoming_trades = 0
         try:
-            incoming_battles = len(combat.list_incoming_battle_requests(self.current_user.get("id")))
-        except Exception:
+            incoming_battles = len(api.list_incoming_battle_requests(self.current_user.get("id")))
+        except Exception as e:
+            print(f"[ERROR] Failed to list incoming battles: {e}")
             incoming_battles = 0
 
         self.online_label.setText(f"Online Players: {online_count}")
@@ -1984,32 +2242,45 @@ class GameWindow(QMainWindow):
         apply_fade_in(self.pages[key])
 
     def logout(self) -> None:
-        self.presence_timer.stop()
+        if self.heartbeat_worker:
+            self.heartbeat_worker.stop()
+            self.heartbeat_worker = None
         self.notification_timer.stop()
         self.current_user = None
         self.root_stack.setCurrentWidget(self.auth_page)
 
-    def _heartbeat(self) -> None:
-        if self.current_user is None:
-            return
-        self.refresh_session()
-
     def check_notifications(self) -> None:
         if self.current_user is None or self.root_stack.currentWidget() is self.auth_page:
             return
-        user_id = self.current_user["id"]
+        
+        # FIX: Move notification fetching to a worker thread
+        def fetch_notifications(user_id: int):
+            trades = api.list_incoming_trade_requests(user_id)
+            battles = api.list_incoming_battle_requests(user_id)
+            return trades, battles
+
+        worker = Worker(fetch_notifications, self.current_user.get("id"))
+        worker.signals.finished.connect(self._on_notifications_fetched)
+        QThreadPool.globalInstance().start(worker)
+        
+        # We still call refresh_session separately as it updates the sidebar
         self.refresh_session()
 
-        for request in trading.list_incoming_trade_requests(user_id):
-            if request["id"] in self.seen_trade_notifications:
+    def _on_notifications_fetched(self, data: tuple) -> None:
+        if self.current_user is None or not isinstance(data, tuple) or len(data) != 2:
+            return
+            
+        trades, battles = data
+        for request in trades:
+            if request.get("id") in self.seen_trade_notifications:
                 continue
-            self.seen_trade_notifications.add(request["id"])
+            self.seen_trade_notifications.add(request.get("id"))
             self._handle_trade_request_popup(request)
 
-        for request in combat.list_incoming_battle_requests(user_id):
-            if request["id"] in self.seen_battle_notifications:
+        for request in battles:
+            if request.get("id") in self.seen_battle_notifications:
                 continue
-            self.seen_battle_notifications.add(request["id"])
+            self.seen_battle_notifications.add(request.get("id"))
             self._handle_battle_request_popup(request)
 
     def _handle_trade_request_popup(self, request: dict) -> None:
@@ -2024,15 +2295,15 @@ class GameWindow(QMainWindow):
         clicked = message_box.clickedButton()
         if clicked is accept_button:
             try:
-                snapshot = trading.accept_trade_request(request["id"], self.current_user["id"])
-            except trading.TradeError:
+                snapshot = api.accept_trade_request(request["id"], self.current_user["id"])
+            except Exception:
                 return
-            self.pages["trading"].current_trade_id = snapshot["id"]
+            self.pages["trading"].current_trade_id = snapshot.get("id")
             self.pages["trading"].refresh_page()
         elif clicked is decline_button:
             try:
-                trading.decline_trade_request(request["id"], self.current_user["id"])
-            except trading.TradeError:
+                api.cancel_trade(request["id"], self.current_user["id"])
+            except Exception:
                 return
             self.pages["trading"].refresh_page()
         else:
@@ -2050,8 +2321,8 @@ class GameWindow(QMainWindow):
         clicked = message_box.clickedButton()
         if clicked is decline_button:
             try:
-                combat.cancel_battle(request["id"], self.current_user["id"])
-            except combat.CombatError:
+                api.cancel_battle(request["id"], self.current_user["id"])
+            except Exception:
                 return
             self.pages["fighting"].refresh_page()
             return
