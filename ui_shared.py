@@ -7,180 +7,119 @@ from PyQt5.QtWidgets import QGraphicsOpacityEffect, QWidget
 
 APP_STYLESHEET = """
 QWidget {
-    background: #091019;
-    color: #F4F7FC;
-    font-family: "Avenir Next";
+    background: #2D1F16;
+    color: #EAD2AC;
+    font-family: "Palatino", "Georgia", serif;
     font-size: 14px;
 }
 QMainWindow {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #091019, stop:1 #111D2B);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1A120B, stop:1 #2D1F16);
 }
 QFrame#panel {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #152131, stop:1 #101927);
-    border: 1px solid #28384D;
-    border-radius: 20px;
+    background: #3E2C1C;
+    border: 3px solid #8B5E3C;
+    border-radius: 12px;
+}
+QFrame#parchmentPanel {
+    background: #F4E4BC;
+    color: #2D1F16;
+    border: 2px solid #C19A6B;
+    border-radius: 15px;
 }
 QFrame#heroPanel {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1A2A40, stop:1 #0E1622);
-    border: 1px solid #3D567A;
-    border-radius: 22px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #4E3B24, stop:1 #2D1F16);
+    border: 4px solid #C19A6B;
+    border-radius: 15px;
 }
 QFrame#accentPanel {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #13263D, stop:1 #142236);
-    border: 1px solid #36537A;
-    border-radius: 18px;
+    background: #2D1F16;
+    border: 2px solid #8B5E3C;
+    border-radius: 8px;
 }
 QFrame#softPanel {
-    background: #0F1724;
-    border: 1px solid #243349;
-    border-radius: 16px;
+    background: #F4E4BC;
+    color: #2D1F16;
+    border: 1px solid #C19A6B;
+    border-radius: 6px;
 }
 QFrame#onlineCard {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #121E2E, stop:1 #101824);
-    border: 1px solid #304761;
-    border-radius: 18px;
-}
-QFrame#rarityCard {
-    border-radius: 18px;
-    background: #111B29;
-    border: 1px solid #31435E;
+    background: #4E3B24;
+    border: 2px solid #8B5E3C;
+    border-radius: 10px;
 }
 QLabel#title {
-    font-size: 32px;
-    font-weight: 700;
+    font-size: 42px;
+    font-weight: 800;
+    color: #F4E4BC;
+    text-shadow: 3px 3px #1A120B;
 }
 QLabel#subtitle {
-    color: #AEBBD0;
-    font-size: 14px;
+    color: #C19A6B;
+    font-size: 18px;
+    font-style: italic;
 }
 QLabel#sectionTitle {
-    font-size: 20px;
-    font-weight: 700;
+    font-size: 26px;
+    font-weight: 800;
+    color: #F4E4BC;
+    border-bottom: 2px solid #8B5E3C;
+    margin-bottom: 10px;
 }
 QLabel#statusBadge {
-    background: #182435;
-    border: 1px solid #385275;
-    border-radius: 999px;
-    padding: 5px 11px;
-}
-QLabel#mutedText {
-    color: #95A6BF;
-}
-QLabel#pill {
-    background: #182435;
-    border: 1px solid #385275;
-    border-radius: 999px;
-    padding: 6px 10px;
+    background: #1A120B;
+    border: 2px solid #C19A6B;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #F4E4BC;
     font-weight: 700;
 }
 QLineEdit, QComboBox, QListWidget, QTextEdit, QSpinBox {
-    background: #0D1622;
-    border: 1px solid #324765;
-    border-radius: 14px;
-    padding: 8px 10px;
-    selection-background-color: #1F6FEB;
-}
-QLineEdit:focus, QComboBox:focus, QTextEdit:focus, QSpinBox:focus, QListWidget:focus {
-    border: 1px solid #5A8BFF;
-}
-QComboBox QAbstractItemView, QListWidget {
-    outline: 0;
-}
-QListWidget {
-    padding: 6px;
-}
-QListWidget::item {
-    padding: 10px;
-    border-radius: 10px;
-}
-QListWidget::item:selected {
-    background: #1A2B41;
-    border: 1px solid #4A73A8;
-}
-QTabWidget::pane {
-    border: 1px solid #27384F;
-    border-radius: 16px;
-    background: #111B29;
-    top: -1px;
-}
-QTabBar::tab {
-    background: #101A27;
-    border: 1px solid #223248;
-    border-bottom: none;
-    border-top-left-radius: 12px;
-    border-top-right-radius: 12px;
-    padding: 11px 18px;
-    margin-right: 6px;
-}
-QTabBar::tab:selected {
-    background: #1A283B;
+    background: #1A120B;
+    color: #F4E4BC;
+    border: 2px solid #8B5E3C;
+    border-radius: 6px;
+    padding: 10px 12px;
 }
 QPushButton {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2576FF, stop:1 #3C8DFF);
-    border: none;
-    border-radius: 13px;
-    padding: 10px 16px;
-    font-weight: 700;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #8B5E3C, stop:1 #4E3B24);
+    color: #F4E4BC;
+    border: 3px solid #C19A6B;
+    border-radius: 8px;
+    padding: 12px 20px;
+    font-weight: 800;
+    font-size: 15px;
 }
 QPushButton:hover {
-    background: #4C98FF;
+    background: #A67B5B;
+    border-color: #F4E4BC;
 }
 QPushButton:pressed {
-    background: #1E5FCA;
-}
-QPushButton:disabled {
-    background: #243246;
-    color: #8090A8;
-}
-QPushButton#secondaryButton {
-    background: #172332;
-    border: 1px solid #38506E;
-}
-QPushButton#secondaryButton:hover {
-    background: #22344B;
-}
-QPushButton#dangerButton {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #A73434, stop:1 #D65050);
-}
-QPushButton#dangerButton:hover {
-    background: #DB5858;
-}
-QPushButton#successButton {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1D9B59, stop:1 #34C978);
-}
-QPushButton#successButton:hover {
-    background: #3AD784;
-}
-QPushButton#ghostButton {
-    background: transparent;
-    border: 1px solid #3A5275;
-}
-QPushButton#ghostButton:hover {
-    background: #162335;
+    background: #3E2C1C;
+    padding-top: 14px;
+    padding-bottom: 10px;
 }
 QPushButton#navButton {
     text-align: left;
     background: transparent;
-    border: 1px solid transparent;
-    padding: 13px 14px;
+    border: none;
+    color: #C19A6B;
+    font-size: 16px;
+    padding: 15px 20px;
 }
 QPushButton#navButton:checked {
-    background: #16263B;
-    border: 1px solid #4670A7;
-}
-QScrollArea {
-    border: none;
+    background: #4E3B24;
+    color: #F4E4BC;
+    border-left: 6px solid #C19A6B;
 }
 QProgressBar {
-    border: 1px solid #304B6C;
-    border-radius: 10px;
-    background: #0E1723;
+    border: 2px solid #8B5E3C;
+    background: #1A120B;
+    height: 24px;
     text-align: center;
-    min-height: 18px;
+    border-radius: 6px;
 }
 QProgressBar::chunk {
-    border-radius: 9px;
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2AB96E, stop:1 #69E094);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #8B5E3C, stop:1 #C19A6B);
 }
 """
 

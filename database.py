@@ -13,22 +13,16 @@ def get_connection() -> sqlite3.Connection:
     connection = sqlite3.connect(DATABASE_PATH)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-    # Lazily ensure schema exists so listing queries don't crash when the app
-    # skips calling initialize_database() at startup.
+    
+    # We always run the schema check/migration logic to ensure everything is up to date
+    # across different environments (local, Render, etc.)
     try:
-        has_users_table = (
-            connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
-            ).fetchone()
-            is not None
-        )
-        if not has_users_table:
-            _create_schema(connection)
-            connection.commit()
-    except Exception:
-        # If the schema check fails for any reason, let the original callers
-        # surface a meaningful DB error later.
-        pass
+        _create_schema(connection)
+        connection.commit()
+    except Exception as e:
+        # We don't want to crash everything if one migration fails, 
+        # but we should at least log it.
+        print(f"[ERROR] Database schema initialization/migration failed: {e}")
     return connection
 
 
@@ -76,6 +70,86 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE users ADD COLUMN session_token TEXT")
     if "password" in user_columns and "password_hash" not in user_columns:
         connection.execute("ALTER TABLE users RENAME COLUMN password TO password_hash")
+    if "real_name" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN real_name TEXT NOT NULL DEFAULT 'Player'")
+    if "last_seen" not in user_columns:
+        # SQLite cannot use non-constant defaults like CURRENT_TIMESTAMP in ALTER TABLE.
+        # We use a constant string and update it in a separate step.
+        connection.execute("ALTER TABLE users ADD COLUMN last_seen TEXT NOT NULL DEFAULT '2024-01-01 00:00:00'")
+        connection.execute("UPDATE users SET last_seen = CURRENT_TIMESTAMP")
+
+    # Migration for trades table
+    has_trades = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades'").fetchone() is not None
+    if has_trades:
+        trade_columns = {row["name"] for row in connection.execute("PRAGMA table_info(trades)").fetchall()}
+        if "initiator_id" not in trade_columns:
+            print("[DEBUG] Adding 'initiator_id' to trades table...")
+            connection.execute("ALTER TABLE trades ADD COLUMN initiator_id INTEGER")
+        if "recipient_id" not in trade_columns:
+            print("[DEBUG] Adding 'recipient_id' to trades table...")
+            connection.execute("ALTER TABLE trades ADD COLUMN recipient_id INTEGER")
+        if "initiator_tokens" not in trade_columns:
+            print("[DEBUG] Adding 'initiator_tokens' to trades table...")
+            connection.execute("ALTER TABLE trades ADD COLUMN initiator_tokens INTEGER NOT NULL DEFAULT 0")
+        if "recipient_tokens" not in trade_columns:
+            print("[DEBUG] Adding 'recipient_tokens' to trades table...")
+            connection.execute("ALTER TABLE trades ADD COLUMN recipient_tokens INTEGER NOT NULL DEFAULT 0")
+        if "initiator_confirmed" not in trade_columns:
+            print("[DEBUG] Adding 'initiator_confirmed' to trades table...")
+            connection.execute("ALTER TABLE trades ADD COLUMN initiator_confirmed INTEGER NOT NULL DEFAULT 0")
+        if "recipient_confirmed" not in trade_columns:
+            print("[DEBUG] Adding 'recipient_confirmed' to trades table...")
+            connection.execute("ALTER TABLE trades ADD COLUMN recipient_confirmed INTEGER NOT NULL DEFAULT 0")
+        if "status" not in trade_columns:
+            print("[DEBUG] Adding 'status' to trades table...")
+            connection.execute("ALTER TABLE trades ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
+        if "created_at" not in trade_columns:
+            print("[DEBUG] Adding 'created_at' to trades table...")
+            connection.execute("ALTER TABLE trades ADD COLUMN created_at TEXT NOT NULL DEFAULT '2024-01-01 00:00:00'")
+        if "updated_at" not in trade_columns:
+            print("[DEBUG] Adding 'updated_at' to trades table...")
+            connection.execute("ALTER TABLE trades ADD COLUMN updated_at TEXT NOT NULL DEFAULT '2024-01-01 00:00:00'")
+    
+    # Migration for battles table
+    has_battles = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='battles'").fetchone() is not None
+    if has_battles:
+        battle_columns = {row["name"] for row in connection.execute("PRAGMA table_info(battles)").fetchall()}
+        if "challenger_id" not in battle_columns:
+            print("[DEBUG] Adding 'challenger_id' to battles table...")
+            connection.execute("ALTER TABLE battles ADD COLUMN challenger_id INTEGER")
+        if "opponent_id" not in battle_columns:
+            print("[DEBUG] Adding 'opponent_id' to battles table...")
+            connection.execute("ALTER TABLE battles ADD COLUMN opponent_id INTEGER")
+        if "challenger_creature_id" not in battle_columns:
+            print("[DEBUG] Adding 'challenger_creature_id' to battles table...")
+            connection.execute("ALTER TABLE battles ADD COLUMN challenger_creature_id INTEGER")
+        if "opponent_creature_id" not in battle_columns:
+            print("[DEBUG] Adding 'opponent_creature_id' to battles table...")
+            connection.execute("ALTER TABLE battles ADD COLUMN opponent_creature_id INTEGER")
+        if "status" not in battle_columns:
+            print("[DEBUG] Adding 'status' to battles table...")
+            connection.execute("ALTER TABLE battles ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'")
+        if "state_json" not in battle_columns:
+            print("[DEBUG] Adding 'state_json' to battles table...")
+            connection.execute("ALTER TABLE battles ADD COLUMN state_json TEXT NOT NULL DEFAULT '{}'")
+        if "challenger_move" not in battle_columns:
+            print("[DEBUG] Adding 'challenger_move' to battles table...")
+            connection.execute("ALTER TABLE battles ADD COLUMN challenger_move TEXT")
+        if "opponent_move" not in battle_columns:
+            print("[DEBUG] Adding 'opponent_move' to battles table...")
+            connection.execute("ALTER TABLE battles ADD COLUMN opponent_move TEXT")
+        if "winner_user_id" not in battle_columns:
+            print("[DEBUG] Adding 'winner_user_id' to battles table...")
+            connection.execute("ALTER TABLE battles ADD COLUMN winner_user_id INTEGER")
+        if "xp_awarded" not in battle_columns:
+            print("[DEBUG] Adding 'xp_awarded' to battles table...")
+            connection.execute("ALTER TABLE battles ADD COLUMN xp_awarded INTEGER NOT NULL DEFAULT 0")
+        if "created_at" not in battle_columns:
+            print("[DEBUG] Adding 'created_at' to battles table...")
+            connection.execute("ALTER TABLE battles ADD COLUMN created_at TEXT NOT NULL DEFAULT '2024-01-01 00:00:00'")
+        if "updated_at" not in battle_columns:
+            print("[DEBUG] Adding 'updated_at' to battles table...")
+            connection.execute("ALTER TABLE battles ADD COLUMN updated_at TEXT NOT NULL DEFAULT '2024-01-01 00:00:00'")
 
     connection.executescript(
         """
@@ -138,21 +212,6 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         """
     )
 
-    # Backfill for older DBs that may have missed columns or used old names.
-    user_columns = {row["name"] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
-    if "last_seen" not in user_columns:
-        # FIX: SQLite cannot use non-constant defaults like CURRENT_TIMESTAMP in ALTER TABLE.
-        # Use a constant string and update it in a separate step if necessary.
-        connection.execute("ALTER TABLE users ADD COLUMN last_seen TEXT NOT NULL DEFAULT '2024-01-01 00:00:00'")
-        connection.execute("UPDATE users SET last_seen = CURRENT_TIMESTAMP")
-    if "password" in user_columns and "password_hash" not in user_columns:
-        connection.execute("ALTER TABLE users RENAME COLUMN password TO password_hash")
-    if "real_name" not in user_columns:
-        connection.execute("ALTER TABLE users ADD COLUMN real_name TEXT NOT NULL DEFAULT 'Player'")
-    if "is_banned" not in user_columns:
-        connection.execute("ALTER TABLE users ADD COLUMN is_banned INTEGER NOT NULL DEFAULT 0")
-    if "session_token" not in user_columns:
-        connection.execute("ALTER TABLE users ADD COLUMN session_token TEXT")
 
 
 def fetch_one(query: str, params: Iterable[Any] = ()) -> dict | None:

@@ -14,7 +14,6 @@ class CombatError(ValueError):
 
 
 def build_combatant(creature: dict) -> dict:
-    # FIX: Defensive dictionary access
     creature_key = creature.get("creature_key")
     template = CREATURE_CATALOG.get(creature_key)
     if not template:
@@ -60,7 +59,6 @@ def get_move_options(combatant: dict | None) -> list[dict]:
 
 
 def calculate_damage(attacker: dict, defender: dict, move: dict, rng: random.Random) -> dict:
-    # FIX: Defensive programming
     move_dmg = move.get("damage", 0)
     attacker_atk = attacker.get("stats", {}).get("Attack", 0)
     defender_def = defender.get("stats", {}).get("Defense", 0)
@@ -141,7 +139,7 @@ def resolve_round(state: dict, challenger_move_name: str, opponent_move_name: st
     challenger = state.get("challenger")
     opponent = state.get("opponent")
     
-    # FIX: Ensure combatants exist
+    # Ensure combatants exist
     if not challenger or not opponent:
         print(f"[ERROR] Combatants missing in state: challenger={bool(challenger)}, opponent={bool(opponent)}")
         raise CombatError("Battle state is corrupted: combatants missing.")
@@ -197,25 +195,28 @@ def _deserialize_state(payload: str) -> dict:
 
 
 def _load_battle(connection, battle_id: int):
-    return connection.execute(
+    # Use LEFT JOIN to be more resilient, though users should always exist
+    row = connection.execute(
         """
         SELECT
             b.*,
             challenger.username AS challenger_username,
             opponent.username AS opponent_username
         FROM battles b
-        JOIN users challenger ON challenger.id = b.challenger_id
-        JOIN users opponent ON opponent.id = b.opponent_id
+        LEFT JOIN users challenger ON challenger.id = b.challenger_id
+        LEFT JOIN users opponent ON opponent.id = b.opponent_id
         WHERE b.id = ?
         """,
         (battle_id,),
     ).fetchone()
+    return dict(row) if row else None
 
 
 def _participant_role(battle, user_id: int) -> tuple[str, str]:
-    if battle["challenger_id"] == user_id:
+    # Battle is now a dict
+    if battle.get("challenger_id") == user_id:
         return "challenger", "opponent"
-    if battle["opponent_id"] == user_id:
+    if battle.get("opponent_id") == user_id:
         return "opponent", "challenger"
     raise CombatError("You are not part of this battle.")
 
@@ -258,9 +259,12 @@ def _assert_creature_available(connection, creature_id: int, exclude_battle_id: 
 
 def _get_owned_creature(connection, user_id: int, creature_id: int) -> dict:
     row = connection.execute("SELECT * FROM owned_creatures WHERE id = ?", (creature_id,)).fetchone()
-    if row is None or row["user_id"] != user_id:
+    if row is None:
+        raise CombatError("Creature not found.")
+    creature = dict(row)
+    if creature.get("user_id") != user_id:
         raise CombatError("You do not own that creature.")
-    return inventory.enrich_creature(dict(row))
+    return inventory.enrich_creature(creature)
 
 
 def _reward_lines(rewards: dict) -> list[str]:
@@ -331,7 +335,8 @@ def _build_snapshot(connection, battle_id: int, viewer_id: int | None = None) ->
 
     if viewer_id is not None:
         try:
-            role, other_role = _participant_role(battle, viewer_id)
+            role, other_role = _participant_role(battle, int(viewer_id))
+            print(f"[DEBUG] _build_snapshot: viewer_id={viewer_id}, role={role}")
             snapshot["your_role"] = role
             snapshot["their_role"] = other_role
             snapshot["your_side"] = snapshot.get(role)
@@ -349,6 +354,7 @@ def _build_snapshot(connection, battle_id: int, viewer_id: int | None = None) ->
             snapshot["can_forfeit"] = battle.get("status") == "active" and not snapshot["finished"]
             snapshot["you_won"] = battle.get("winner_user_id") == viewer_id if battle.get("winner_user_id") else None
         except CombatError:
+            print(f"[WARNING] _build_snapshot: CombatError for viewer_id={viewer_id}")
             # Handle cases where viewer is not a participant (e.g., admin or spectator if implemented)
             pass
 
@@ -411,12 +417,13 @@ def create_battle(challenger_id: int, opponent_username: str, challenger_creatur
     database.initialize_database()
 
     with database.transaction() as connection:
-        opponent = connection.execute(
+        opponent_row = connection.execute(
             "SELECT id, username FROM users WHERE username = ? COLLATE NOCASE",
             (opponent_username.strip(),),
         ).fetchone()
-        if opponent is None:
+        if opponent_row is None:
             raise CombatError("That opponent does not exist.")
+        opponent = dict(opponent_row)
         if opponent.get("id") == challenger_id:
             raise CombatError("You cannot battle yourself.")
 
@@ -461,10 +468,12 @@ def get_battle(battle_id: int, viewer_id: int | None = None) -> dict:
 
 
 def accept_battle(battle_id: int, user_id: int, creature_id: int) -> dict:
+    print(f"[DEBUG] combat.accept_battle: battle_id={battle_id}, user_id={user_id}, creature_id={creature_id}")
     with database.transaction() as connection:
         battle = _load_battle(connection, battle_id)
         _ensure_battle_open(battle)
         role, _other_role = _participant_role(battle, user_id)
+        print(f"[DEBUG] combat.accept_battle: role={role}")
         if role != "opponent":
             raise CombatError("Only the challenged player can accept this battle.")
         if battle["status"] != "pending":
@@ -472,9 +481,11 @@ def accept_battle(battle_id: int, user_id: int, creature_id: int) -> dict:
 
         challenger_creature = _get_owned_creature(connection, battle["challenger_id"], battle["challenger_creature_id"])
         opponent_creature = _get_owned_creature(connection, user_id, creature_id)
+        print(f"[DEBUG] combat.accept_battle: creatures resolved. challenger_creature={challenger_creature['creature_name']}, opponent_creature={opponent_creature['creature_name']}")
         _assert_creature_available(connection, creature_id, exclude_battle_id=battle_id)
 
         state = initialize_battle_state(challenger_creature, opponent_creature)
+        print(f"[DEBUG] combat.accept_battle: battle state initialized.")
         connection.execute(
             """
             UPDATE battles

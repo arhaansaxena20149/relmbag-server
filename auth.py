@@ -78,6 +78,7 @@ def signup_user(email: str, real_name: str, username: str, password: str) -> dic
         )
         print(f"[DEBUG] Signup response status: {response.status_code}")
         payload = safe_json(response)
+        print(f"[DEBUG] Signup payload: {payload}")
         
         if not payload or payload.get("status") != "success":
             message = _parse_server_message(payload, response)
@@ -127,6 +128,7 @@ def login_user(identifier: str, password: str) -> dict:
             json={"username": clean_identifier, "password": clean_password},
         )
         payload = safe_json(response)
+        print(f"[DEBUG] Login payload: {payload}")
 
         if not payload or payload.get("status") != "success":
             print(f"[DEBUG] Login failed for user: {clean_identifier}")
@@ -134,8 +136,8 @@ def login_user(identifier: str, password: str) -> dict:
 
         print(f"[DEBUG] Login successful for user: {payload.get('username')}")
         
-        # Fallback to username if id is missing (old server compatibility)
-        user_username = payload.get("username") or clean_username
+        # Fallback to identifier if username/id is missing (old server compatibility)
+        user_username = payload.get("username") or clean_identifier
         user_id = payload.get("id") or user_username
         return {
             "id": user_id,

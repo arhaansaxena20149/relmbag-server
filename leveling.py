@@ -28,7 +28,6 @@ def apply_experience(level: int, xp: int, gained_xp: int) -> tuple[int, int, int
 
 
 def scale_stats(base_stats: dict, rarity: str, level: int) -> dict:
-    # FIX: Defensive dictionary access
     rarity_multiplier = RARITY_STAT_MULTIPLIERS.get(rarity, 1.0)
     hp_scale = 1 + ((level - 1) * 0.06)
     combat_scale = 1 + ((level - 1) * 0.045)
@@ -42,7 +41,6 @@ def scale_stats(base_stats: dict, rarity: str, level: int) -> dict:
 
 
 def calculate_creature_value(rarity: str, level: int, value_roll: float) -> int:
-    # FIX: Defensive dictionary access
     base_val = BASE_VALUES.get(rarity, 100)
     level_multiplier = 1 + ((level - 1) * 0.075)
     return int(round(base_val * value_roll * level_multiplier))
@@ -55,7 +53,6 @@ def grant_experience_to_creature(creature_id: int, gained_xp: int) -> dict:
     if creature is None:
         raise ValueError("Creature not found.")
 
-    # FIX: Defensive dictionary access
     level = creature.get("level", 1)
     xp = creature.get("xp", 0)
     

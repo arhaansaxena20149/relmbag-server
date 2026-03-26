@@ -31,8 +31,8 @@ def create_trade(initiator_id: int, recipient_username: str) -> dict:
 
 def list_user_trades(user_id: int | str) -> list[dict]:
     try:
-        # Fallback to username if id is None, for old server compatibility
-        endpoint = f"get_trades/{user_id}"
+        # Standardize to use user_id if possible
+        endpoint = f"trades/{user_id}"
         response = safe_request("get", endpoint)
         return safe_json(response) or []
     except Exception as e:
@@ -41,8 +41,6 @@ def list_user_trades(user_id: int | str) -> list[dict]:
 
 def get_trade(trade_id: int, user_id: int | str) -> dict:
     try:
-        # Old server might not have get_trade endpoint, or it might be different.
-        # For now, let's keep it but handle the case where it might fail.
         response = safe_request("get", f"trade/{trade_id}", params={"user_id": user_id})
         return safe_json(response) or {}
     except Exception as e:
@@ -118,9 +116,12 @@ def confirm_trade(trade_id: int, user_id: int) -> dict:
 
 def list_incoming_trade_requests(user_id: int | str) -> list[dict]:
     try:
-        # For old server, this might be get_trades
-        response = safe_request("get", f"get_trades/{user_id}")
-        return safe_json(response) or []
+        # Synchronized with server.py /trades_incoming route
+        print(f"[DEBUG] Fetching incoming trades for user {user_id}")
+        response = safe_request("get", f"trades_incoming/{user_id}")
+        data = safe_json(response)
+        print(f"[DEBUG] Received {len(data) if isinstance(data, list) else 0} incoming trades")
+        return data or []
     except Exception as e:
         print(f"[ERROR] Failed to list incoming trades for {user_id}: {e}")
         return []
@@ -128,6 +129,7 @@ def list_incoming_trade_requests(user_id: int | str) -> list[dict]:
 # --- Combat API ---
 def create_battle(challenger_id: int, opponent_username: str, creature_id: int) -> dict:
     try:
+        print(f"[DEBUG] Creating battle: challenger {challenger_id}, opponent {opponent_username}")
         response = safe_request("post", "create_battle", json={
             "challenger_id": challenger_id,
             "opponent_username": opponent_username,
@@ -140,8 +142,9 @@ def create_battle(challenger_id: int, opponent_username: str, creature_id: int) 
 
 def list_user_battles(user_id: int | str) -> list[dict]:
     try:
-        # Fallback to username for old server compatibility
-        endpoint = f"list_user_battles/{user_id}"
+        # Synchronized with server.py /battles route
+        endpoint = f"battles/{user_id}"
+        print(f"[DEBUG] Fetching user battles for {user_id}")
         response = safe_request("get", endpoint)
         return safe_json(response) or []
     except Exception as e:
@@ -150,8 +153,9 @@ def list_user_battles(user_id: int | str) -> list[dict]:
 
 def get_battle(battle_id: int, user_id: int | str) -> dict:
     try:
-        # Old server endpoint: get_battle
-        response = safe_request("get", f"get_battle/{battle_id}", params={"user_id": user_id})
+        # Synchronized with server.py /battle route
+        print(f"[DEBUG] Fetching battle {battle_id} for user {user_id}")
+        response = safe_request("get", f"battle/{battle_id}", params={"user_id": user_id})
         return safe_json(response) or {}
     except Exception as e:
         print(f"[ERROR] Failed to get battle {battle_id}: {e}")
@@ -159,6 +163,7 @@ def get_battle(battle_id: int, user_id: int | str) -> dict:
 
 def accept_battle(battle_id: int, user_id: int, creature_id: int) -> dict:
     try:
+        print(f"[DEBUG] Accepting battle {battle_id} for user {user_id}")
         response = safe_request("post", "accept_battle", json={
             "battle_id": battle_id,
             "user_id": user_id,
@@ -171,6 +176,7 @@ def accept_battle(battle_id: int, user_id: int, creature_id: int) -> dict:
 
 def cancel_battle(battle_id: int, user_id: int) -> None:
     try:
+        print(f"[DEBUG] Cancelling battle {battle_id} for user {user_id}")
         safe_request("post", "cancel_battle", json={
             "battle_id": battle_id,
             "user_id": user_id
@@ -180,13 +186,12 @@ def cancel_battle(battle_id: int, user_id: int) -> None:
 
 def list_incoming_battle_requests(user_id: int | str) -> list[dict]:
     try:
-        # For old server, this might be list_user_battles
-        response = safe_request("get", f"list_user_battles/{user_id}")
-        battles = safe_json(response) or []
-        # Old server might return all battles, so filter for pending
-        if isinstance(battles, list):
-            return [b for b in battles if b.get("status") == "pending" and b.get("opponent_id") == user_id]
-        return []
+        # Synchronized with server.py /battles_incoming route
+        print(f"[DEBUG] Fetching incoming battles for user {user_id}")
+        response = safe_request("get", f"battles_incoming/{user_id}")
+        data = safe_json(response)
+        print(f"[DEBUG] Received {len(data) if isinstance(data, list) else 0} incoming battles")
+        return data or []
     except Exception as e:
         print(f"[ERROR] Failed to list incoming battles for {user_id}: {e}")
         return []

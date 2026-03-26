@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QDialog,
 )
 
 import auth
@@ -108,63 +109,64 @@ class CreatureCard(QFrame):
         super().__init__()
         self.creature = creature
         self.setCursor(Qt.PointingHandCursor)
-        self.setFixedWidth(214)
+        self.setFixedWidth(180)
+        self.setFixedHeight(240)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
 
-        top_row = QHBoxLayout()
-        top_row.setSpacing(8)
-        rarity = QLabel(creature["rarity"])
-        rarity.setAlignment(Qt.AlignCenter)
-        rarity.setStyleSheet(rarity_badge_stylesheet(creature["rarity_color"]))
+        rarity_color = creature["rarity_color"]
+        
+        # Level Badge
         level = QLabel(f"Lv {creature['level']}")
-        level.setObjectName("pill")
-        top_row.addWidget(rarity, 1)
-        top_row.addWidget(level)
-        layout.addLayout(top_row)
-
-        image_shell = QFrame()
-        image_shell.setStyleSheet(
-            f"background: {with_alpha(creature['rarity_color'], 34)}; "
-            f"border: 1px solid {with_alpha(creature['rarity_color'], 160)}; border-radius: 18px;"
+        level.setStyleSheet(
+            f"background: {with_alpha(rarity_color, 200)}; color: #1A120B; "
+            "border-radius: 4px; padding: 2px 6px; font-weight: 800; font-size: 11px;"
         )
-        image_layout = QVBoxLayout(image_shell)
-        image_layout.setContentsMargins(12, 12, 12, 12)
+        layout.addWidget(level, 0, Qt.AlignRight)
 
+        # Image
         image = QLabel()
         image.setAlignment(Qt.AlignCenter)
-        image.setPixmap(load_pixmap(creature["image_path"], 112))
-        image_layout.addWidget(image)
-        layout.addWidget(image_shell)
+        image.setPixmap(load_pixmap(creature["image_path"], 100))
+        image.setStyleSheet(
+            f"background: {with_alpha(rarity_color, 30)}; "
+            f"border: 2px solid {with_alpha(rarity_color, 100)}; border-radius: 10px;"
+        )
+        layout.addWidget(image, 1)
 
+        # Name
         name = QLabel(creature["display_name"])
         name.setWordWrap(True)
         name.setAlignment(Qt.AlignCenter)
-        name.setStyleSheet("font-size: 16px; font-weight: 800;")
+        name.setStyleSheet(f"font-size: 14px; font-weight: 800; color: {rarity_color};")
         layout.addWidget(name)
 
-        stats = QLabel(creature_stat_row(creature))
-        stats.setAlignment(Qt.AlignCenter)
-        stats.setWordWrap(True)
-        stats.setStyleSheet("color: #D2DEED; font-size: 12px;")
-        layout.addWidget(stats)
+        # Rarity
+        rarity = QLabel(creature["rarity"])
+        rarity.setAlignment(Qt.AlignCenter)
+        rarity.setStyleSheet(f"color: {with_alpha(rarity_color, 180)}; font-size: 11px; font-weight: 700;")
+        layout.addWidget(rarity)
 
-        value = QLabel(f"Value {creature['value']}")
-        value.setAlignment(Qt.AlignCenter)
-        value.setStyleSheet("color: #AAB6C7; font-weight: 700;")
-        layout.addWidget(value)
+        # Stats
+        stats = QLabel(f"ATK {creature['stats']['Attack']} | DEF {creature['stats']['Defense']}")
+        stats.setAlignment(Qt.AlignCenter)
+        stats.setStyleSheet("color: #C19A6B; font-size: 10px;")
+        layout.addWidget(stats)
 
         self.set_selected(False)
 
     def set_selected(self, selected: bool) -> None:
-        border = self.creature["rarity_color"] if selected else "#253247"
-        glow = with_alpha(self.creature["rarity_color"], 42 if selected else 12)
-        self.setStyleSheet(
-            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {glow}, stop:1 #121B29); "
-            f"border: 2px solid {border}; border-radius: 18px;"
-        )
+        color = self.creature["rarity_color"]
+        if selected:
+            self.setStyleSheet(
+                f"background: #3E2C1C; border: 3px solid {color}; border-radius: 12px;"
+            )
+        else:
+            self.setStyleSheet(
+                f"background: #1A120B; border: 2px solid #4E3B24; border-radius: 12px;"
+            )
 
     def mousePressEvent(self, event) -> None:
         self.clicked.emit(self.creature["id"])
@@ -236,95 +238,122 @@ class AuthPage(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(60, 50, 60, 50)
-        outer.setSpacing(18)
+        outer.setContentsMargins(0, 0, 0, 0)
+        
+        # Background or Overlay
+        self.bg = QFrame(self)
+        self.bg.setObjectName("heroPanel")
+        self.bg.setStyleSheet("border-radius: 0px; border: none;")
+        outer.addWidget(self.bg)
+        
+        card_container = QVBoxLayout(self.bg)
+        card_container.setAlignment(Qt.AlignCenter)
 
         card = QFrame()
-        card.setObjectName("panel")
+        card.setObjectName("parchmentPanel")
+        card.setFixedSize(500, 650)
         card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(36, 36, 36, 36)
-        card_layout.setSpacing(18)
+        card_layout.setContentsMargins(40, 40, 40, 40)
+        card_layout.setSpacing(20)
 
-        title = QLabel(APP_TITLE)
+        title = QLabel("RELMBAG ARENA")
         title.setObjectName("title")
-        subtitle = QLabel(APP_SUBTITLE)
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("font-size: 48px; color: #2D1F16; text-shadow: none;")
+        
+        subtitle = QLabel("THE GREAT SUMMONING")
         subtitle.setObjectName("subtitle")
-        helper = QLabel(
-            "Create at least two player accounts for trading and PvP-style battles, or run `python3 database.py --seed-demo`."
-        )
-        helper.setWordWrap(True)
-        helper.setStyleSheet("color: #8FA0B8;")
+        subtitle.setAlignment(Qt.AlignCenter)
+        subtitle.setStyleSheet("color: #8B5E3C; font-weight: 800; letter-spacing: 2px;")
 
         tabs = QTabWidget()
-        tabs.addTab(self._build_login_tab(), "Login")
-        tabs.addTab(self._build_signup_tab(), "Sign Up")
+        tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #C19A6B; background: transparent; }
+            QTabBar::tab { background: #EAD2AC; color: #8B5E3C; padding: 10px 20px; border-top-left-radius: 8px; border-top-right-radius: 8px; font-weight: 800; }
+            QTabBar::tab:selected { background: #F4E4BC; color: #2D1F16; border-bottom: 2px solid #F4E4BC; }
+        """)
+        tabs.addTab(self._build_login_tab(), "LOGIN")
+        tabs.addTab(self._build_signup_tab(), "SIGN UP")
 
         card_layout.addWidget(title)
         card_layout.addWidget(subtitle)
-        card_layout.addWidget(helper)
+        
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet("background: #C19A6B;")
+        card_layout.addWidget(line)
+        
         card_layout.addWidget(tabs)
-        outer.addStretch(1)
-        outer.addWidget(card, alignment=Qt.AlignCenter)
-        outer.addStretch(1)
+        card_container.addWidget(card)
 
     def _build_login_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        form = QFormLayout()
+        layout.setContentsMargins(10, 20, 10, 10)
+        layout.setSpacing(15)
 
         self.login_identifier = QLineEdit()
-        self.login_identifier.setPlaceholderText("Username or email")
+        self.login_identifier.setPlaceholderText("Username or Email")
+        self.login_identifier.setStyleSheet("background: #F4E4BC; color: #2D1F16; border-color: #C19A6B;")
+        
         self.login_password = QLineEdit()
         self.login_password.setPlaceholderText("Password")
         self.login_password.setEchoMode(QLineEdit.Password)
+        self.login_password.setStyleSheet("background: #F4E4BC; color: #2D1F16; border-color: #C19A6B;")
+        
         self.login_status = QLabel()
+        self.login_status.setAlignment(Qt.AlignCenter)
 
-        form.addRow("Username / Email", self.login_identifier)
-        form.addRow("Password", self.login_password)
-
-        login_button = QPushButton("Log In")
+        login_button = QPushButton("ENTER THE ARENA")
         login_button.clicked.connect(self.handle_login)
 
-        layout.addLayout(form)
+        layout.addWidget(QLabel("<b>IDENTIFIER</b>"))
+        layout.addWidget(self.login_identifier)
+        layout.addWidget(QLabel("<b>PASSWORD</b>"))
+        layout.addWidget(self.login_password)
         layout.addWidget(login_button)
         layout.addWidget(self.login_status)
-        layout.addStretch(1)
+        layout.addStretch()
         return widget
 
     def _build_signup_tab(self) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        form = QFormLayout()
+        layout.setContentsMargins(10, 20, 10, 10)
+        layout.setSpacing(10)
 
         self.signup_email = QLineEdit()
         self.signup_real_name = QLineEdit()
         self.signup_username = QLineEdit()
         self.signup_password = QLineEdit()
         self.signup_password.setEchoMode(QLineEdit.Password)
-        self.signup_password.setPlaceholderText("At least 8 characters")
+        
+        for field in [self.signup_email, self.signup_real_name, self.signup_username, self.signup_password]:
+            field.setStyleSheet("background: #F4E4BC; color: #2D1F16; border-color: #C19A6B;")
+
         self.signup_status = QLabel()
+        self.signup_status.setAlignment(Qt.AlignCenter)
 
-        form.addRow("Email", self.signup_email)
-        form.addRow("Real Name", self.signup_real_name)
-        form.addRow("Username", self.signup_username)
-        form.addRow("Password", self.signup_password)
-
-        signup_button = QPushButton("Create Account")
+        signup_button = QPushButton("CLAIM YOUR TITLE")
         signup_button.clicked.connect(self.handle_signup)
 
-        layout.addLayout(form)
+        layout.addWidget(QLabel("<b>EMAIL</b>"))
+        layout.addWidget(self.signup_email)
+        layout.addWidget(QLabel("<b>FULL NAME</b>"))
+        layout.addWidget(self.signup_real_name)
+        layout.addWidget(QLabel("<b>USERNAME</b>"))
+        layout.addWidget(self.signup_username)
+        layout.addWidget(QLabel("<b>PASSWORD</b>"))
+        layout.addWidget(self.signup_password)
         layout.addWidget(signup_button)
         layout.addWidget(self.signup_status)
-        layout.addStretch(1)
+        layout.addStretch()
         return widget
 
     def handle_login(self) -> None:
         self.login_status.setText("Logging in...")
         self.login_status.setStyleSheet("color: #F2C14E;")
-        
-        # FIX: Move login to a worker thread to prevent UI freeze
         worker = Worker(auth.login_user, self.login_identifier.text(), self.login_password.text())
         worker.signals.finished.connect(self._on_auth_success)
         worker.signals.error.connect(lambda e: status_message(self.login_status, str(e), "#F47C7C"))
@@ -333,8 +362,6 @@ class AuthPage(QWidget):
     def handle_signup(self) -> None:
         self.signup_status.setText("Creating account...")
         self.signup_status.setStyleSheet("color: #F2C14E;")
-
-        # FIX: Move signup to a worker thread to prevent UI freeze
         worker = Worker(
             auth.signup_user,
             self.signup_email.text(),
@@ -347,53 +374,60 @@ class AuthPage(QWidget):
         QThreadPool.globalInstance().start(worker)
 
     def _on_auth_success(self, user: dict) -> None:
-        print(f"[DEBUG] Authentication successful for user: {user.get('username')}")
         self.authenticated.emit(user)
 
 
 class DashboardPage(BasePage):
     def __init__(self, game_window: "GameWindow") -> None:
         super().__init__(game_window)
-
         layout = QVBoxLayout(self)
-        layout.setSpacing(18)
+        layout.setSpacing(25)
+        layout.setContentsMargins(40, 40, 40, 40)
 
+        # Welcome Portal
         hero = QFrame()
         hero.setObjectName("heroPanel")
         hero_layout = QVBoxLayout(hero)
-        hero_layout.setContentsMargins(26, 24, 26, 24)
-
-        self.welcome_label = QLabel("Welcome")
+        hero_layout.setContentsMargins(40, 40, 40, 40)
+        
+        self.welcome_label = QLabel("Welcome back, Traveler")
         self.welcome_label.setObjectName("title")
-        self.summary_label = QLabel("Open crates, manage your collection, and line up your next battle.")
-        self.summary_label.setObjectName("subtitle")
+        subtitle = QLabel("The Realm awaits your next command. Manage your collection or challenge rivals.")
+        subtitle.setObjectName("subtitle")
         hero_layout.addWidget(self.welcome_label)
-        hero_layout.addWidget(self.summary_label)
+        hero_layout.addWidget(subtitle)
         layout.addWidget(hero)
 
-        stats_row = QHBoxLayout()
-        self.creature_count = self._stat_card("Creatures", "0")
-        self.total_value = self._stat_card("Collection Value", "0")
-        self.highest_rarity = self._stat_card("Top Rarity", "None")
-        stats_row.addWidget(self.creature_count[0])
-        stats_row.addWidget(self.total_value[0])
-        stats_row.addWidget(self.highest_rarity[0])
-        layout.addLayout(stats_row)
+        # Stats Grid
+        stats_layout = QHBoxLayout()
+        stats_layout.setSpacing(20)
+        
+        self.creature_count = self._stat_card("CREATURES", "0")
+        self.total_value = self._stat_card("TOTAL VALUE", "0")
+        self.highest_rarity = self._stat_card("PEAK RARITY", "None")
+        
+        stats_layout.addWidget(self.creature_count[0])
+        stats_layout.addWidget(self.total_value[0])
+        stats_layout.addWidget(self.highest_rarity[0])
+        layout.addLayout(stats_layout)
 
+        # Quick Actions
         quick_panel = QFrame()
-        quick_panel.setObjectName("accentPanel")
+        quick_panel.setObjectName("panel")
         quick_layout = QVBoxLayout(quick_panel)
-        quick_title = QLabel("Quick Actions")
+        quick_layout.setContentsMargins(30, 30, 30, 30)
+        
+        quick_title = QLabel("Quick Travel")
         quick_title.setObjectName("sectionTitle")
         quick_layout.addWidget(quick_title)
 
         buttons = QGridLayout()
+        buttons.setSpacing(15)
         actions = [
-            ("Open a Crate", "crate"),
+            ("Summon Chamber", "crate"),
             ("View Inventory", "inventory"),
-            ("Manage Trades", "trading"),
-            ("Start Battle", "fighting"),
-            ("Check Profile", "profile"),
+            ("Trading Hall", "trading"),
+            ("Battle Arena", "fighting"),
         ]
         for index, (label, page_key) in enumerate(actions):
             button = QPushButton(label)
@@ -405,12 +439,19 @@ class DashboardPage(BasePage):
 
     def _stat_card(self, heading: str, value: str) -> tuple[QFrame, QLabel]:
         card = QFrame()
-        card.setObjectName("panel")
+        card.setObjectName("accentPanel")
+        card.setFixedHeight(120)
         card_layout = QVBoxLayout(card)
+        card_layout.setAlignment(Qt.AlignCenter)
+        
         label = QLabel(heading)
-        label.setStyleSheet("color: #9FB0C8;")
+        label.setStyleSheet("color: #C19A6B; font-weight: 800; font-size: 12px; letter-spacing: 1px;")
+        label.setAlignment(Qt.AlignCenter)
+        
         value_label = QLabel(value)
-        value_label.setStyleSheet("font-size: 24px; font-weight: 700;")
+        value_label.setStyleSheet("font-size: 32px; font-weight: 800; color: #F4E4BC;")
+        value_label.setAlignment(Qt.AlignCenter)
+        
         card_layout.addWidget(label)
         card_layout.addWidget(value_label)
         return card, value_label
@@ -426,14 +467,17 @@ class DashboardPage(BasePage):
         QThreadPool.globalInstance().start(worker)
 
     def _on_summary_fetched(self, summary: dict) -> None:
-        user = self.game_window.current_user
-        if not user or not isinstance(summary, dict):
-            return
-        
-        self.welcome_label.setText(f"Welcome back, {user.get('username', 'Player')}")
-        self.creature_count[1].setText(str(summary.get("count", 0)))
-        self.total_value[1].setText(str(summary.get("total_value", 0)))
-        self.highest_rarity[1].setText(summary.get("highest_rarity", "None"))
+        try:
+            user = self.game_window.current_user
+            if not user or not isinstance(summary, dict) or not self.isVisible():
+                return
+            
+            self.welcome_label.setText(f"Welcome back, {user.get('username', 'Player')}")
+            self.creature_count[1].setText(str(summary.get("count", 0)))
+            self.total_value[1].setText(str(summary.get("total_value", 0)))
+            self.highest_rarity[1].setText(summary.get("highest_rarity", "None"))
+        except RuntimeError:
+            pass
 
 
 class CratePage(BasePage):
@@ -580,50 +624,53 @@ class CratePage(BasePage):
         QThreadPool.globalInstance().start(worker)
 
     def _on_crate_opened(self, result: dict) -> None:
-        if not isinstance(result, dict):
-            return
-        
-        creature = result.get("creature")
-        if not creature:
-            return
+        try:
+            if not isinstance(result, dict) or not self.isVisible():
+                return
+            
+            creature = result.get("creature")
+            if not creature:
+                return
 
-        self.game_window.refresh_session()
-        self.result_image.setPixmap(load_pixmap(creature.get("image_path"), 180))
-        
-        rarity_color = creature.get("rarity_color", "#FFFFFF")
-        self.result_panel.setStyleSheet(
-            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {with_alpha(rarity_color, 68)}, stop:1 #142236); "
-            f"border: 1px solid {with_alpha(rarity_color, 205)}; border-radius: 18px;"
-        )
-        
-        rarity = creature.get("rarity", "Common")
-        self.result_rarity.setText(rarity)
-        self.result_rarity.setStyleSheet(rarity_badge_stylesheet(rarity_color))
-        
-        display_name = creature.get("display_name", "Unknown")
-        self.result_name.setText(display_name)
-        self.result_name.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {rarity_color};")
-        
-        self.result_meta.setText(
-            f"Summon Chance: {DROP_RATES.get(rarity, 0)}%  |  Level {creature.get('level', 1)}  |  Trade Value {creature.get('value', 0)}\n"
-            f"Remaining Tokens: {result.get('remaining_tokens', 0)}  |  Crate Cost: {result.get('crate_cost', 0)}"
-        )
-        self.result_stats.setText(
-            "Combat Stats\n"
-            f"{creature_stat_row(creature)}\n"
-            f"Unlocked Moves: {', '.join(move.get('name', 'move') for move in creature.get('moves', []) if move.get('unlocked'))}"
-        )
-        self.result_glow.setText(
-            f"You summoned a {rarity} creature. Sprite, rarity, and drop chance stay visible here after every pull."
-        )
-        self.result_glow.setStyleSheet(
-            f"background: {with_alpha(rarity_color, 70)}; border: 1px solid {with_alpha(rarity_color, 190)}; "
-            "border-radius: 14px; padding: 8px 10px; font-weight: 700;"
-        )
-        status_message(self.feedback_label, "Crate opened successfully.", "#63D471")
-        self.game_window.pages["inventory"].refresh_page()
-        self.game_window.pages["dashboard"].refresh_page()
-        self.game_window.pages["profile"].refresh_page()
+            self.game_window.refresh_session()
+            self.result_image.setPixmap(load_pixmap(creature.get("image_path"), 180))
+            
+            rarity_color = creature.get("rarity_color", "#FFFFFF")
+            self.result_panel.setStyleSheet(
+                f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {with_alpha(rarity_color, 68)}, stop:1 #142236); "
+                f"border: 1px solid {with_alpha(rarity_color, 205)}; border-radius: 18px;"
+            )
+            
+            rarity = creature.get("rarity", "Common")
+            self.result_rarity.setText(rarity)
+            self.result_rarity.setStyleSheet(rarity_badge_stylesheet(rarity_color))
+            
+            display_name = creature.get("display_name", "Unknown")
+            self.result_name.setText(display_name)
+            self.result_name.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {rarity_color};")
+            
+            self.result_meta.setText(
+                f"Summon Chance: {DROP_RATES.get(rarity, 0)}%  |  Level {creature.get('level', 1)}  |  Trade Value {creature.get('value', 0)}\n"
+                f"Remaining Tokens: {result.get('remaining_tokens', 0)}  |  Crate Cost: {result.get('crate_cost', 0)}"
+            )
+            self.result_stats.setText(
+                "Combat Stats\n"
+                f"{creature_stat_row(creature)}\n"
+                f"Unlocked Moves: {', '.join(move.get('name', 'move') for move in creature.get('moves', []) if move.get('unlocked'))}"
+            )
+            self.result_glow.setText(
+                f"You summoned a {rarity} creature. Sprite, rarity, and drop chance stay visible here after every pull."
+            )
+            self.result_glow.setStyleSheet(
+                f"background: {with_alpha(rarity_color, 70)}; border: 1px solid {with_alpha(rarity_color, 190)}; "
+                "border-radius: 14px; padding: 8px 10px; font-weight: 700;"
+            )
+            status_message(self.feedback_label, "Crate opened successfully.", "#63D471")
+            self.game_window.pages["inventory"].refresh_page()
+            self.game_window.pages["dashboard"].refresh_page()
+            self.game_window.pages["profile"].refresh_page()
+        except RuntimeError:
+            pass
 
 
 class InventoryPage(BasePage):
@@ -634,74 +681,105 @@ class InventoryPage(BasePage):
         self.selected_creature_id: int | None = None
 
         root = QHBoxLayout(self)
-        root.setSpacing(18)
+        root.setSpacing(25)
+        root.setContentsMargins(20, 20, 20, 20)
 
-        left_panel = QFrame()
-        left_panel.setObjectName("panel")
-        left_layout = QVBoxLayout(left_panel)
-        title = QLabel("Creature Inventory")
+        # Left side: Grid
+        left_side = QVBoxLayout()
+        
+        header = QVBoxLayout()
+        title = QLabel("Creature Collection")
         title.setObjectName("sectionTitle")
-        hint = QLabel("Every card shows the creature sprite, rarity, level, and value. Click a card for the full profile.")
-        hint.setObjectName("subtitle")
-        hint.setWordWrap(True)
-        self.inventory_summary = QLabel("Collection loading...")
+        self.inventory_summary = QLabel("Loading creatures...")
         self.inventory_summary.setObjectName("statusBadge")
-        left_layout.addWidget(title)
-        left_layout.addWidget(hint)
-        left_layout.addWidget(self.inventory_summary)
-
+        header.addWidget(title)
+        header.addWidget(self.inventory_summary)
+        
         controls = QHBoxLayout()
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Rarity", "Value", "Level"])
         self.sort_combo.currentTextChanged.connect(self.refresh_page)
         self.filter_combo = QComboBox()
-        self.filter_combo.addItems(["All"] + RARITY_ORDER)
+        self.filter_combo.addItems(["All Rarities"] + RARITY_ORDER)
         self.filter_combo.currentTextChanged.connect(self.refresh_page)
-        controls.addWidget(QLabel("Sort"))
+        controls.addWidget(QLabel("Sort:"))
         controls.addWidget(self.sort_combo)
-        controls.addWidget(QLabel("Filter"))
+        controls.addWidget(QLabel("Filter:"))
         controls.addWidget(self.filter_combo)
-        left_layout.addLayout(controls)
+        controls.addStretch()
+        header.addLayout(controls)
+        left_side.addLayout(header)
 
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setStyleSheet("background: transparent; border: none;")
         self.grid_container = QWidget()
+        self.grid_container.setStyleSheet("background: transparent;")
         self.grid_layout = QGridLayout(self.grid_container)
-        self.grid_layout.setSpacing(14)
+        self.grid_layout.setSpacing(15)
         self.grid_layout.setAlignment(Qt.AlignTop)
         self.scroll_area.setWidget(self.grid_container)
-        left_layout.addWidget(self.scroll_area)
-        root.addWidget(left_panel, 3)
+        left_side.addWidget(self.scroll_area)
+        
+        root.addLayout(left_side, 3)
 
-        right_panel = QFrame()
-        right_panel.setObjectName("accentPanel")
-        self.detail_panel = right_panel
-        right_layout = QVBoxLayout(right_panel)
+        # Right side: Parchment Detail
+        self.detail_panel = QFrame()
+        self.detail_panel.setObjectName("parchmentPanel")
+        self.detail_panel.setFixedWidth(350)
+        detail_layout = QVBoxLayout(self.detail_panel)
+        detail_layout.setContentsMargins(25, 25, 25, 25)
+        detail_layout.setSpacing(15)
+
         self.detail_image = QLabel()
         self.detail_image.setAlignment(Qt.AlignCenter)
-        self.detail_image.setPixmap(load_pixmap("", 180))
-        self.detail_name = QLabel("Select a creature")
-        self.detail_name.setStyleSheet("font-size: 24px; font-weight: 700;")
-        self.detail_rarity = QLabel("Rarity")
+        self.detail_image.setFixedSize(200, 200)
+        self.detail_image.setStyleSheet("background: rgba(0,0,0,0.05); border-radius: 15px;")
+        
+        self.detail_name = QLabel("Select a Creature")
+        self.detail_name.setAlignment(Qt.AlignCenter)
+        self.detail_name.setStyleSheet("font-size: 28px; font-weight: 800; color: #2D1F16;")
+        
+        self.detail_rarity = QLabel("-")
         self.detail_rarity.setAlignment(Qt.AlignCenter)
-        self.detail_chance = QLabel("Summon Chance")
-        self.detail_chance.setAlignment(Qt.AlignCenter)
-        self.detail_level = QLabel("Level")
-        self.detail_value = QLabel("Value")
-        self.detail_stats = QLabel("Stats")
+        self.detail_rarity.setStyleSheet("font-weight: 700; font-size: 16px;")
+
+        self.detail_stats = QLabel("")
+        self.detail_stats.setStyleSheet("color: #4E3B24; font-size: 14px; font-family: 'Palatino';")
         self.detail_stats.setWordWrap(True)
-        self.detail_moves = QLabel("Moves")
+
+        self.detail_moves = QLabel("")
+        self.detail_moves.setStyleSheet("color: #4E3B24; font-size: 13px; font-style: italic;")
         self.detail_moves.setWordWrap(True)
-        right_layout.addWidget(self.detail_image)
-        right_layout.addWidget(self.detail_name)
-        right_layout.addWidget(self.detail_rarity)
-        right_layout.addWidget(self.detail_chance)
-        right_layout.addWidget(self.detail_level)
-        right_layout.addWidget(self.detail_value)
-        right_layout.addWidget(self.detail_stats)
-        right_layout.addWidget(self.detail_moves)
-        right_layout.addStretch(1)
-        root.addWidget(right_panel, 2)
+
+        self.detail_value = QLabel("")
+        self.detail_value.setAlignment(Qt.AlignCenter)
+        self.detail_value.setStyleSheet("font-weight: 800; color: #8B5E3C; font-size: 18px;")
+
+        detail_layout.addWidget(self.detail_image, 0, Qt.AlignCenter)
+        detail_layout.addWidget(self.detail_name)
+        detail_layout.addWidget(self.detail_rarity)
+        
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet("background: #C19A6B;")
+        detail_layout.addWidget(line)
+        
+        detail_layout.addWidget(QLabel("<b>BASE ATTRIBUTES</b>"))
+        detail_layout.addWidget(self.detail_stats)
+        
+        line2 = QFrame()
+        line2.setFrameShape(QFrame.HLine)
+        line2.setStyleSheet("background: #C19A6B;")
+        detail_layout.addWidget(line2)
+        
+        detail_layout.addWidget(QLabel("<b>ABILITIES</b>"))
+        detail_layout.addWidget(self.detail_moves)
+        
+        detail_layout.addStretch()
+        detail_layout.addWidget(self.detail_value)
+
+        root.addWidget(self.detail_panel, 2)
 
     def refresh_page(self) -> None:
         user = self.game_window.current_user
@@ -710,9 +788,8 @@ class InventoryPage(BasePage):
         
         sort_map = {"Rarity": "rarity", "Value": "value", "Level": "level"}
         rarity_filter = self.filter_combo.currentText()
-        selected_filter = None if rarity_filter == "All" else rarity_filter
+        selected_filter = None if rarity_filter == "All Rarities" else rarity_filter
         
-        # FIX: Move inventory fetching to worker thread to prevent UI freeze
         worker = Worker(
             inventory.get_inventory,
             user.get("username"),
@@ -723,46 +800,45 @@ class InventoryPage(BasePage):
         QThreadPool.globalInstance().start(worker)
 
     def _on_inventory_fetched(self, creatures: list[dict]) -> None:
-        if not isinstance(creatures, list):
-            return
+        try:
+            if not isinstance(creatures, list) or not self.isVisible():
+                return
+                
+            self.current_creatures = {creature.get("id"): creature for creature in creatures if creature.get("id") is not None}
+            total_value = sum(creature.get("value", 0) for creature in creatures)
             
-        self.current_creatures = {creature.get("id"): creature for creature in creatures if creature.get("id") is not None}
-        total_value = sum(creature.get("value", 0) for creature in creatures)
-        
-        self.inventory_summary.setText(
-            f"{len(creatures)} creature{'s' if len(creatures) != 1 else ''} shown  |  Total Value {total_value}"
-        )
-        clear_layout(self.grid_layout)
-        self.current_cards = {}
+            self.inventory_summary.setText(
+                f"{len(creatures)} Creatures Found | Collection Value: {total_value} Tokens"
+            )
+            clear_layout(self.grid_layout)
+            self.current_cards = {}
 
-        if not creatures:
-            empty = QLabel("No creatures match this view yet.")
-            empty.setStyleSheet("color: #9FB0C8; padding: 18px;")
-            self.grid_layout.addWidget(empty, 0, 0)
-            self._clear_details()
-            return
+            if not creatures:
+                empty = QLabel("Your collection is empty. Visit the Summon Chamber!")
+                empty.setStyleSheet("color: #C19A6B; padding: 40px; font-size: 18px;")
+                self.grid_layout.addWidget(empty, 0, 0, Qt.AlignCenter)
+                self._clear_details()
+                return
 
-        for index, creature in enumerate(creatures):
-            card = CreatureCard(creature)
-            card.clicked.connect(self.select_creature)
-            self.current_cards[creature.get("id")] = card
-            self.grid_layout.addWidget(card, index // 4, index % 4)
+            for index, creature in enumerate(creatures):
+                card = CreatureCard(creature)
+                card.clicked.connect(self.select_creature)
+                self.current_cards[creature.get("id")] = card
+                self.grid_layout.addWidget(card, index // 4, index % 4)
 
-        if self.selected_creature_id not in self.current_creatures:
-            self.selected_creature_id = creatures[0].get("id")
-        self.select_creature(self.selected_creature_id)
+            if self.selected_creature_id not in self.current_creatures:
+                self.selected_creature_id = creatures[0].get("id")
+            self.select_creature(self.selected_creature_id)
+        except RuntimeError:
+            pass
 
     def _clear_details(self) -> None:
-        self.detail_panel.setStyleSheet("")
         self.detail_image.setPixmap(load_pixmap("", 180))
-        self.detail_name.setText("Select a creature")
-        self.detail_rarity.setText("Rarity")
-        self.detail_rarity.setStyleSheet("")
-        self.detail_chance.setText("Summon Chance")
-        self.detail_level.setText("Level")
-        self.detail_value.setText("Value")
-        self.detail_stats.setText("Stats")
-        self.detail_moves.setText("Moves")
+        self.detail_name.setText("Select a Creature")
+        self.detail_rarity.setText("-")
+        self.detail_stats.setText("")
+        self.detail_moves.setText("")
+        self.detail_value.setText("")
 
     def select_creature(self, creature_id: int) -> None:
         self.selected_creature_id = creature_id
@@ -773,1086 +849,785 @@ class InventoryPage(BasePage):
         for card_id, card in self.current_cards.items():
             card.set_selected(card_id == creature_id)
 
-        self.detail_panel.setStyleSheet(
-            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {with_alpha(creature['rarity_color'], 64)}, stop:1 #142236); "
-            f"border: 1px solid {with_alpha(creature['rarity_color'], 205)}; border-radius: 18px;"
-        )
         self.detail_image.setPixmap(load_pixmap(creature["image_path"], 180))
         self.detail_name.setText(creature["display_name"])
-        self.detail_name.setStyleSheet(f"font-size: 24px; font-weight: 700; color: {creature['rarity_color']};")
-        self.detail_rarity.setText(creature["rarity"])
-        self.detail_rarity.setStyleSheet(rarity_badge_stylesheet(creature["rarity_color"]))
-        self.detail_chance.setText(f"Summon Chance: {DROP_RATES[creature['rarity']]}%")
-        self.detail_chance.setStyleSheet("font-weight: 700; color: #E7EEF9;")
-        self.detail_level.setText(f"Level {creature['level']}  |  XP {creature['xp']}")
-        self.detail_value.setText(f"Trade Value: {creature['value']}  |  Sprite Stored")
+        self.detail_name.setStyleSheet(f"font-size: 28px; font-weight: 800; color: {creature['rarity_color']};")
+        
+        self.detail_rarity.setText(creature["rarity"].upper())
+        self.detail_rarity.setStyleSheet(f"color: {creature['rarity_color']}; font-weight: 800; font-size: 18px;")
+        
+        stats = creature["stats"]
         self.detail_stats.setText(
-            "Combat Stats\n"
-            f"HP: {creature['stats']['HP']}\n"
-            f"Attack: {creature['stats']['Attack']}\n"
-            f"Defense: {creature['stats']['Defense']}\n"
-            f"Speed: {creature['stats']['Speed']}"
+            f"<b>HEALTH:</b> {stats['HP']}<br>"
+            f"<b>ATTACK:</b> {stats['Attack']}<br>"
+            f"<b>DEFENSE:</b> {stats['Defense']}<br>"
+            f"<b>SPEED:</b> {stats['Speed']}"
         )
-        self.detail_moves.setText("Moves\n" + "\n".join(creature_move_lines(creature)))
+        
+        moves_text = "<br>".join([f"• {line}" for line in creature_move_lines(creature, limit=4)])
+        self.detail_moves.setText(moves_text)
+        
+        self.detail_value.setText(f"VALUE: {creature['value']} TOKENS")
 
 
-class TradingPage(BasePage):
-    def _populate_online_players(self) -> None:
-        user = self.game_window.current_user
-        if user is None:
-            return
-
-        # FIX: Move network call to worker thread to prevent UI freeze
-        worker = Worker(get_users)
-        worker.signals.finished.connect(self._on_users_fetched)
-        QThreadPool.globalInstance().start(worker)
-
-    def _on_users_fetched(self, users: list[dict]) -> None:
-        user = self.game_window.current_user
-        if user is None:
-            return
-
-        print(f"[DEBUG] TradingPage received {len(users)} users from server.")
-        clear_layout(self.online_layout)
-
-        # FIX: Defensive programming, use .get()
-        online_players = []
-        for u in users:
-            if not isinstance(u, dict):
-                continue
-            username = u.get("username")
-            is_online = bool(u.get("online") or u.get("is_online"))
-            
-            # Debug log for each other user
-            if username and username != user.get("username"):
-                print(f"[DEBUG] Other User: {username}, is_online: {is_online}")
-
-            if username and username != user.get("username") and is_online:
-                online_players.append({
-                    "username": username,
-                    "creature_count": u.get("creature_count") or inventory.get_inventory_count(username)
-                })
-
-        print(f"[DEBUG] Total other online players found: {len(online_players)}")
-        if not online_players:
-            empty = QLabel("No other players are online.")
-            empty.setObjectName("mutedText")
-            self.online_layout.addWidget(empty)
-            return
-
-        for u in online_players:
-            self.online_layout.addWidget(
-                PlayerActionCard(
-                    username=u["username"],
-                    creature_count=u["creature_count"],
-                    accent="#58C96B",
-                    button_text="Trade",
-                    on_click=partial(self.create_trade, u["username"]),
-                )
-            )
-
-        self.online_layout.addStretch(1)
-    
+class TradingLobby(BasePage):
     def __init__(self, game_window: "GameWindow") -> None:
         super().__init__(game_window)
-        self.current_trade_id: int | None = None
-        self.current_snapshot: dict | None = None
-
-        root = QVBoxLayout(self)
-        root.setSpacing(18)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(25)
+        layout.setContentsMargins(40, 40, 40, 40)
 
         hero = QFrame()
         hero.setObjectName("heroPanel")
         hero_layout = QVBoxLayout(hero)
-        title = QLabel("Trading Hub")
+        hero_layout.setContentsMargins(30, 30, 30, 30)
+        
+        title = QLabel("Trading Hall")
         title.setObjectName("title")
-        subtitle = QLabel("Browse online players, send a trade request in one click, and accept incoming offers from your inbox.")
+        subtitle = QLabel("Choose an online player to initiate a secure creature trade.")
         subtitle.setObjectName("subtitle")
-        subtitle.setWordWrap(True)
-        self.trade_banner = QLabel()
-        self.trade_banner.setWordWrap(True)
-        refresh_button = QPushButton("Refresh")
-        refresh_button.setObjectName("secondaryButton")
-        refresh_button.clicked.connect(self.refresh_page)
         hero_layout.addWidget(title)
         hero_layout.addWidget(subtitle)
-        hero_layout.addWidget(self.trade_banner)
-        hero_layout.addWidget(refresh_button, alignment=Qt.AlignLeft)
-        root.addWidget(hero)
+        layout.addWidget(hero)
 
-        body = QHBoxLayout()
+        selection_panel = QFrame()
+        selection_panel.setObjectName("panel")
+        sel_layout = QVBoxLayout(selection_panel)
+        sel_layout.setContentsMargins(30, 30, 30, 30)
+        sel_layout.setSpacing(20)
 
-        online_panel = QFrame()
-        online_panel.setObjectName("panel")
-        online_layout = QVBoxLayout(online_panel)
-        online_title = QLabel("Online Players")
-        online_title.setObjectName("sectionTitle")
-        online_hint = QLabel("Send a trade request directly from the live player list.")
-        online_hint.setObjectName("subtitle")
-        online_hint.setWordWrap(True)
-        self.online_scroll = QScrollArea()
-        self.online_scroll.setWidgetResizable(True)
-        self.online_container = QWidget()
-        self.online_layout = QVBoxLayout(self.online_container)
-        self.online_layout.setSpacing(12)
-        self.online_layout.setAlignment(Qt.AlignTop)
-        self.online_scroll.setWidget(self.online_container)
-        online_layout.addWidget(online_title)
-        online_layout.addWidget(online_hint)
-        online_layout.addWidget(self.online_scroll)
-        body.addWidget(online_panel, 1)
+        sel_layout.addWidget(QLabel("<b>SELECT TRADING PARTNER</b>"))
+        self.player_dropdown = QComboBox()
+        self.player_dropdown.setPlaceholderText("Scanning for online players...")
+        sel_layout.addWidget(self.player_dropdown)
 
-        trades_panel = QFrame()
-        trades_panel.setObjectName("panel")
-        trades_layout = QVBoxLayout(trades_panel)
-        trades_title = QLabel("Requests & Trades")
-        trades_title.setObjectName("sectionTitle")
-        trades_hint = QLabel("Incoming requests stay on top, then active trades, then history.")
-        trades_hint.setObjectName("subtitle")
-        trades_hint.setWordWrap(True)
-        self.trade_list = QListWidget()
-        self.trade_list.itemSelectionChanged.connect(self.on_trade_selected)
-        trades_layout.addWidget(trades_title)
-        trades_layout.addWidget(trades_hint)
-        trades_layout.addWidget(self.trade_list)
-        body.addWidget(trades_panel, 1)
+        self.send_request_button = QPushButton("Send Trade Request")
+        self.send_request_button.clicked.connect(self.initiate_trade)
+        sel_layout.addWidget(self.send_request_button)
 
-        detail_panel = QFrame()
-        detail_panel.setObjectName("panel")
-        detail_layout = QVBoxLayout(detail_panel)
-        self.trade_header = QLabel("Select or create a trade.")
-        self.trade_header.setObjectName("sectionTitle")
-        self.trade_status = QLabel()
-        self.trade_status.setWordWrap(True)
-        detail_layout.addWidget(self.trade_header)
-        detail_layout.addWidget(self.trade_status)
-
-        self.request_panel = QFrame()
-        self.request_panel.setObjectName("softPanel")
-        request_layout = QHBoxLayout(self.request_panel)
-        self.accept_trade_button = QPushButton("Accept Trade")
-        self.accept_trade_button.setObjectName("successButton")
-        self.accept_trade_button.clicked.connect(self.accept_trade_request)
-        self.decline_trade_button = QPushButton("Decline Trade")
-        self.decline_trade_button.setObjectName("dangerButton")
-        self.decline_trade_button.clicked.connect(self.decline_trade_request)
-        self.cancel_request_button = QPushButton("Cancel Request")
-        self.cancel_request_button.setObjectName("dangerButton")
-        self.cancel_request_button.clicked.connect(self.cancel_trade)
-        request_layout.addWidget(self.accept_trade_button)
-        request_layout.addWidget(self.decline_trade_button)
-        request_layout.addWidget(self.cancel_request_button)
-        detail_layout.addWidget(self.request_panel)
-
-        self.offer_panel = QFrame()
-        self.offer_panel.setObjectName("accentPanel")
-        offer_layout = QVBoxLayout(self.offer_panel)
-        self.inventory_list = QListWidget()
-        self.my_offer_list = QListWidget()
-        self.their_offer_list = QListWidget()
-        self.your_offer_title = QLabel("Your Offer")
-        self.their_offer_title = QLabel("Their Offer")
-        self.offer_tokens = QSpinBox()
-        self.offer_tokens.setMaximum(99999999)
-        self.offer_tokens.setPrefix("Tokens: ")
-
-        offer_layout.addWidget(QLabel("Your Inventory"))
-        offer_layout.addWidget(self.inventory_list)
-
-        controls = QHBoxLayout()
-        add_button = QPushButton("Add Creature")
-        add_button.clicked.connect(self.add_selected_creature)
-        remove_button = QPushButton("Remove Offered Creature")
-        remove_button.setObjectName("secondaryButton")
-        remove_button.clicked.connect(self.remove_selected_creature)
-        controls.addWidget(add_button)
-        controls.addWidget(remove_button)
-        offer_layout.addLayout(controls)
-
-        token_row = QHBoxLayout()
-        update_tokens_button = QPushButton("Update Token Offer")
-        update_tokens_button.setObjectName("secondaryButton")
-        update_tokens_button.clicked.connect(self.update_token_offer)
-        token_row.addWidget(self.offer_tokens)
-        token_row.addWidget(update_tokens_button)
-        offer_layout.addLayout(token_row)
-
-        offer_layout.addWidget(self.your_offer_title)
-        offer_layout.addWidget(self.my_offer_list)
-        offer_layout.addWidget(self.their_offer_title)
-        offer_layout.addWidget(self.their_offer_list)
-
-        confirm_row = QHBoxLayout()
-        self.confirm_button = QPushButton("Confirm Trade")
-        self.confirm_button.clicked.connect(self.confirm_trade)
-        self.cancel_trade_button = QPushButton("Cancel Trade")
-        self.cancel_trade_button.setObjectName("dangerButton")
-        self.cancel_trade_button.clicked.connect(self.cancel_trade)
-        confirm_row.addWidget(self.confirm_button)
-        confirm_row.addWidget(self.cancel_trade_button)
-        offer_layout.addLayout(confirm_row)
-
-        self.your_value_label = QLabel("Your Value: 0")
-        self.their_value_label = QLabel("Their Value: 0")
-        self.fairness_label = QLabel("Fairness")
-        self.fairness_label.setAlignment(Qt.AlignCenter)
-        offer_layout.addWidget(self.your_value_label)
-        offer_layout.addWidget(self.their_value_label)
-        offer_layout.addWidget(self.fairness_label)
-        detail_layout.addWidget(self.offer_panel)
-        body.addWidget(detail_panel, 2)
-
-        root.addLayout(body)
+        self.status_label = QLabel("")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        sel_layout.addWidget(self.status_label)
+        
+        layout.addWidget(selection_panel)
+        layout.addStretch()
 
     def refresh_page(self) -> None:
-        user = self.game_window.current_user
-        if user is None:
-            return
-        self._populate_online_players()
-        
-        # FIX: Move trade list fetching to worker thread
-        worker = Worker(api.list_user_trades, user.get("id"))
-        worker.signals.finished.connect(self._on_trade_list_fetched)
-        QThreadPool.globalInstance().start(worker)
-
-    def _on_trade_list_fetched(self, trades: list[dict]) -> None:
-        if not isinstance(trades, list):
-            return
-            
-        self.trade_list.blockSignals(True)
-        self.trade_list.clear()
-        selected_row = 0
-        for index, trade_row in enumerate(trades):
-            status = trade_row.get("status")
-            if status == "pending":
-                direction = "Incoming" if trade_row.get("direction") == "incoming" else "Sent"
-            elif status == "open":
-                direction = "Active"
-            else:
-                direction = str(status).title()
-            item = QListWidgetItem(f"{direction}  |  {trade_row.get('counterpart_username', 'Unknown')}")
-            item.setData(Qt.UserRole, trade_row.get("id"))
-            self.trade_list.addItem(item)
-            if trade_row.get("id") == self.current_trade_id:
-                selected_row = index
-        self.trade_list.blockSignals(False)
-
-        incoming_count = sum(1 for trade_row in trades if trade_row.get("status") == "pending" and trade_row.get("direction") == "incoming")
-        active_count = sum(1 for trade_row in trades if trade_row.get("status") == "open")
-        status_message(
-            self.trade_banner,
-            f"{incoming_count} incoming request{'s' if incoming_count != 1 else ''}  |  {active_count} active trade{'s' if active_count != 1 else ''}",
-            "#AEBBD0",
-        )
-
-        if trades:
-            if self.current_trade_id not in {row.get("id") for row in trades}:
-                self.current_trade_id = trades[0].get("id")
-                selected_row = 0
-            self.trade_list.setCurrentRow(selected_row)
-            self.load_trade_snapshot()
-        else:
-            self.current_trade_id = None
-            self.current_snapshot = None
-            self.clear_trade_display()
-            
-    def create_trade(self, recipient_username: str) -> None:
-        user = self.game_window.current_user
-        if user is None:
-            return
-
-        worker = Worker(api.create_trade, user.get("id"), recipient_username)
-        worker.signals.finished.connect(self._on_trade_created)
-        worker.signals.error.connect(lambda e: show_error(self, str(e)))
-        QThreadPool.globalInstance().start(worker)
-
-    def _on_trade_created(self, snapshot: dict) -> None:
-        if not isinstance(snapshot, dict):
-            return
-        self.current_trade_id = snapshot.get("id")
-        self.refresh_page()
-
-    def on_trade_selected(self) -> None:
-        item = self.trade_list.currentItem()
-        if item is None:
-            return
-        self.current_trade_id = item.data(Qt.UserRole)
-        self.load_trade_snapshot()
-
-    def load_trade_snapshot(self) -> None:
-        if self.current_trade_id is None:
-            self.clear_trade_display()
-            return
-            
-        # FIX: Move DB/Network call to worker thread to prevent UI freeze
-        # We fetch both the trade and the user's inventory for the selector
-        def get_trade_and_inventory(trade_id: int, user_id: int, username: str):
-            snapshot = api.get_trade(trade_id, user_id)
-            user_inventory = inventory.get_inventory(username, sort_by="rarity")
-            return snapshot, user_inventory
-
-        worker = Worker(
-            get_trade_and_inventory,
-            self.current_trade_id,
-            self.game_window.current_user.get("id"),
-            self.game_window.current_user.get("username")
-        )
-        worker.signals.finished.connect(self._on_trade_data_fetched)
-        worker.signals.error.connect(lambda e: show_error(self, str(e)))
-        QThreadPool.globalInstance().start(worker)
-
-    def _on_trade_data_fetched(self, data: tuple) -> None:
-        if not isinstance(data, tuple) or len(data) != 2:
-            self.current_snapshot = None
-            self.clear_trade_display()
-            return
-            
-        self.current_snapshot, self.user_inventory = data
-        self.render_snapshot()
-
-    def clear_trade_display(self) -> None:
-        self.trade_header.setText("Select or create a trade.")
-        self.trade_status.setText("Online players appear on the left. Click Trade to send a request.")
-        self.request_panel.hide()
-        self.offer_panel.hide()
-        self.inventory_list.clear()
-        self.my_offer_list.clear()
-        self.their_offer_list.clear()
-        self.your_value_label.setText("Your Value: 0")
-        self.their_value_label.setText("Their Value: 0")
-        self.fairness_label.setText("Fairness")
-        self.fairness_label.setStyleSheet("")
-
-    def render_snapshot(self) -> None:
-        snapshot = self.current_snapshot
-        if snapshot is None:
-            self.clear_trade_display()
-            return
-            
-        your_side = snapshot.get("your_side")
-        their_side = snapshot.get("their_side")
-        if not your_side or not their_side:
-            return
-
-        self.trade_header.setText(f"Trade with {their_side.get('username', 'Opponent')}")
-        self.trade_status.setText(self._describe_trade(snapshot))
-        
-        user_tokens = self.game_window.current_user.get("tokens", 0) if self.game_window.current_user else 0
-        self.offer_tokens.setMaximum(user_tokens)
-        self.offer_tokens.setValue(your_side.get("tokens", 0))
-        
-        self.your_offer_title.setText(f"Your Offer ({'Confirmed' if your_side.get('confirmed') else 'Open'})")
-        self.their_offer_title.setText(f"Their Offer ({'Confirmed' if their_side.get('confirmed') else 'Open'})")
-
-        status = snapshot.get("status")
-        self.request_panel.setVisible(status == "pending")
-        self.accept_trade_button.setVisible(snapshot.get("can_accept", False))
-        self.decline_trade_button.setVisible(snapshot.get("can_decline", False))
-        self.cancel_request_button.setVisible(snapshot.get("can_cancel_request", False))
-
-        self.offer_panel.setVisible(status in {"open", "completed"})
-        self.confirm_button.setVisible(status == "open")
-        self.cancel_trade_button.setVisible(status == "open")
-        self.inventory_list.setEnabled(status == "open")
-        self.offer_tokens.setEnabled(status == "open")
-        self.populate_inventory_list()
-        self.populate_offer_lists(snapshot)
-
-    def _describe_trade(self, snapshot: dict) -> str:
-        your_side = snapshot.get("your_side")
-        their_side = snapshot.get("their_side")
-        if not your_side or not their_side:
-            return "Loading trade data..."
-            
-        status = snapshot.get("status")
-        if status == "pending":
-            if snapshot.get("can_accept"):
-                return f"{their_side.get('username', 'Opponent')} wants to trade. Accept to open the trade builder, or decline the request."
-            return f"Trade request sent to {their_side.get('username', 'Opponent')}. Waiting for a response."
-        
-        if status == "open":
-            return (
-                f"You {'have' if your_side.get('confirmed') else 'have not'} confirmed. "
-                f"{their_side.get('username', 'Opponent')} {'has' if their_side.get('confirmed') else 'has not'} confirmed."
-            )
-        
-        if status == "completed":
-            return f"Trade completed with {their_side.get('username', 'Opponent')}."
-        
-        if status == "declined":
-            return f"{their_side.get('username', 'Opponent')} declined this trade request."
-            
-        return "This trade is no longer active."
-
-    def populate_inventory_list(self) -> None:
-        self.inventory_list.clear()
-        if self.current_snapshot is None or self.current_snapshot.get("status") != "open":
-            return
-        
-        your_side = self.current_snapshot.get("your_side")
-        if not your_side:
-            return
-            
-        offered_ids = {creature.get("id") for creature in your_side.get("creatures", []) if creature.get("id") is not None}
-        
-        # FIX: Use the inventory data fetched by the load_trade_snapshot worker
-        creatures = getattr(self, "user_inventory", [])
-        
-        for creature in creatures:
-            creature_id = creature.get("id")
-            if creature_id is None:
-                continue
-            suffix = " [OFFERED]" if creature_id in offered_ids else ""
-            item = QListWidgetItem(
-                f"{creature.get('display_name')} | {creature.get('rarity')} | Lv {creature.get('level')} | Value {creature.get('value')}{suffix}"
-            )
-            item.setData(Qt.UserRole, creature_id)
-            self.inventory_list.addItem(item)
-
-    def populate_offer_lists(self, snapshot: dict) -> None:
-        your_side = snapshot.get("your_side")
-        their_side = snapshot.get("their_side")
-        if not your_side or not their_side:
-            return
-            
-        self.my_offer_list.clear()
-        self.their_offer_list.clear()
-        
-        for creature in your_side.get("creatures", []):
-            item = QListWidgetItem(
-                f"{creature.get('display_name', 'Unknown')} | {creature.get('rarity', 'Common')} | "
-                f"Lv {creature.get('level', 1)} | Value {creature.get('value', 0)}"
-            )
-            item.setData(Qt.UserRole, creature.get("id"))
-            self.my_offer_list.addItem(item)
-            
-        your_tokens = your_side.get("tokens", 0)
-        if your_tokens:
-            self.my_offer_list.addItem(QListWidgetItem(f"Tokens: {your_tokens}"))
-            
-        for creature in their_side.get("creatures", []):
-            self.their_offer_list.addItem(
-                QListWidgetItem(
-                    f"{creature.get('display_name', 'Unknown')} | {creature.get('rarity', 'Common')} | "
-                    f"Lv {creature.get('level', 1)} | Value {creature.get('value', 0)}"
-                )
-            )
-            
-        their_tokens = their_side.get("tokens", 0)
-        if their_tokens:
-            self.their_offer_list.addItem(QListWidgetItem(f"Tokens: {their_tokens}"))
-
-        fairness = snapshot.get("fairness", {})
-        initiator_id = snapshot.get("initiator", {}).get("id")
-        user_id = self.game_window.current_user.get("id") if self.game_window.current_user else None
-        
-        your_val = fairness.get("initiator_value", 0) if initiator_id == user_id else fairness.get("recipient_value", 0)
-        their_val = fairness.get("recipient_value", 0) if initiator_id == user_id else fairness.get("initiator_value", 0)
-        
-        self.your_value_label.setText(f"Your Value: {your_val}")
-        self.their_value_label.setText(f"Their Value: {their_val}")
-        
-        label = fairness.get("label", "Fairness")
-        delta = fairness.get("delta_percent", 0)
-        self.fairness_label.setText(f"{label} ({delta}% difference)")
-        self.fairness_label.setStyleSheet(
-            f"background: {fairness.get('color', '#AEBBD0')}; color: #081018; border-radius: 999px; padding: 8px 12px; font-weight: 700;"
-        )
-
-    def accept_trade_request(self) -> None:
-        if self.current_trade_id is None:
-            return
-        
-        # FIX: Move trade acceptance to worker thread
-        worker = Worker(api.accept_trade_request, self.current_trade_id, self.game_window.current_user.get("id"))
-        worker.signals.finished.connect(self._on_trade_action_success)
-        worker.signals.error.connect(lambda e: show_error(self, str(e)))
-        QThreadPool.globalInstance().start(worker)
-
-    def _on_trade_action_success(self, snapshot: dict) -> None:
-        if isinstance(snapshot, dict):
-            self.current_snapshot = snapshot
-            self.render_snapshot()
-        self.refresh_page()
-
-    def decline_trade_request(self) -> None:
-        if self.current_trade_id is None:
-            return
-        
-        # FIX: Move trade decline to worker thread
-        worker = Worker(api.decline_trade_request, self.current_trade_id, self.game_window.current_user.get("id"))
-        worker.signals.finished.connect(lambda _: self._on_trade_declined())
-        worker.signals.error.connect(lambda e: show_error(self, str(e)))
-        QThreadPool.globalInstance().start(worker)
-
-    def _on_trade_declined(self) -> None:
-        self.current_trade_id = None
-        self.refresh_page()
-
-    def add_selected_creature(self) -> None:
-        if self.current_trade_id is None:
-            return
-        item = self.inventory_list.currentItem()
-        if item is None:
-            show_error(self, "Select a creature from your inventory first.")
-            return
-        
-        # FIX: Move add creature to worker thread
-        worker = Worker(
-            api.add_creature_to_trade,
-            self.current_trade_id,
-            self.game_window.current_user.get("id"),
-            item.data(Qt.UserRole),
-        )
-        worker.signals.finished.connect(self._on_trade_update_success)
-        worker.signals.error.connect(lambda e: show_error(self, str(e)))
-        QThreadPool.globalInstance().start(worker)
-
-    def remove_selected_creature(self) -> None:
-        if self.current_trade_id is None:
-            return
-        item = self.my_offer_list.currentItem()
-        if item is None or item.data(Qt.UserRole) is None:
-            show_error(self, "Select one of your offered creatures first.")
-            return
-        
-        # FIX: Move remove creature to worker thread
-        worker = Worker(
-            api.remove_creature_from_trade,
-            self.current_trade_id,
-            self.game_window.current_user.get("id"),
-            item.data(Qt.UserRole),
-        )
-        worker.signals.finished.connect(self._on_trade_update_success)
-        worker.signals.error.connect(lambda e: show_error(self, str(e)))
-        QThreadPool.globalInstance().start(worker)
-
-    def update_token_offer(self) -> None:
-        if self.current_trade_id is None:
-            return
-        
-        # FIX: Move update tokens to worker thread
-        worker = Worker(
-            api.set_trade_tokens,
-            self.current_trade_id,
-            self.game_window.current_user.get("id"),
-            self.offer_tokens.value(),
-        )
-        worker.signals.finished.connect(self._on_trade_update_success)
-        worker.signals.error.connect(lambda e: show_error(self, str(e)))
-        QThreadPool.globalInstance().start(worker)
-
-    def _on_trade_update_success(self, snapshot: dict) -> None:
-        if isinstance(snapshot, dict):
-            self.current_snapshot = snapshot
-            self.render_snapshot()
-
-    def confirm_trade(self) -> None:
-        if self.current_trade_id is None:
-            return
-        
-        # FIX: Move confirm trade to worker thread
-        worker = Worker(api.confirm_trade, self.current_trade_id, self.game_window.current_user.get("id"))
-        worker.signals.finished.connect(self._on_trade_confirmed)
-        worker.signals.error.connect(lambda e: show_error(self, str(e)))
-        QThreadPool.globalInstance().start(worker)
-
-    def _on_trade_confirmed(self, snapshot: dict) -> None:
-        if not isinstance(snapshot, dict):
-            return
-        self.current_snapshot = snapshot
-        self.render_snapshot()
-        self.game_window.refresh_session()
-        if snapshot.get("status") == "completed":
-            QMessageBox.information(self, "Trade Complete", "Both sides confirmed. The trade has been executed.")
-            self.game_window.pages["inventory"].refresh_page()
-            self.game_window.pages["profile"].refresh_page()
-            self.game_window.pages["dashboard"].refresh_page()
-
-    def cancel_trade(self) -> None:
-        if self.current_trade_id is None:
-            return
-        
-        # FIX: Move cancel trade to worker thread
-        worker = Worker(api.cancel_trade, self.current_trade_id, self.game_window.current_user.get("id"))
-        worker.signals.finished.connect(lambda _: self.refresh_page())
-        worker.signals.error.connect(lambda e: show_error(self, str(e)))
-        QThreadPool.globalInstance().start(worker)
-
-
-class FightingPage(BasePage):
-    def _populate_online_players(self) -> None:
-        user = self.game_window.current_user
-        if user is None:
-            return
-
-        # FIX: Move network call to worker thread to prevent UI freeze
         worker = Worker(get_users)
         worker.signals.finished.connect(self._on_users_fetched)
         QThreadPool.globalInstance().start(worker)
 
     def _on_users_fetched(self, users: list[dict]) -> None:
-        user = self.game_window.current_user
-        if user is None:
-            return
-
-        print(f"[DEBUG] FightingPage received {len(users)} users from server.")
-        clear_layout(self.online_battle_layout)
-
-        # FIX: Defensive programming, use .get()
-        online_players = []
-        for u in users:
-            if not isinstance(u, dict):
-                continue
-            username = u.get("username")
-            is_online = bool(u.get("online") or u.get("is_online"))
+        try:
+            if not self.isVisible() or not isinstance(users, list):
+                return
             
-            # Debug log for each other user
-            if username and username != user.get("username"):
-                print(f"[DEBUG] Other User: {username}, is_online: {is_online}")
+            self.player_dropdown.clear()
+            current_username = self.game_window.current_user.get("username") if self.game_window.current_user else ""
+            online_count = 0
+            for user in users:
+                if not isinstance(user, dict): continue
+                username = user.get("username")
+                is_online = bool(user.get("online") or user.get("is_online"))
+                if username and username != current_username and is_online:
+                    self.player_dropdown.addItem(f"Player: {username}", username)
+                    online_count += 1
+            
+            if online_count == 0:
+                self.player_dropdown.setPlaceholderText("No other traders online.")
+                self.player_dropdown.setEnabled(False)
+                self.send_request_button.setEnabled(False)
+                self.status_label.setText("No other players online.")
+                self.status_label.setStyleSheet("color: #8B5E3C;")
+            else:
+                self.player_dropdown.setEnabled(True)
+                self.send_request_button.setEnabled(True)
+                self.status_label.setText("")
+        except Exception as e:
+            print(f"[ERROR] TradingLobby data refresh failed: {e}")
 
-            if username and username != user.get("username") and is_online:
-                online_players.append({
-                    "username": username,
-                    "creature_count": u.get("creature_count") or inventory.get_inventory_count(username)
-                })
-
-        print(f"[DEBUG] Total other online players found: {len(online_players)}")
-        if not online_players:
-            empty = QLabel("No other players are online right now.")
-            empty.setWordWrap(True)
-            empty.setObjectName("mutedText")
-            self.online_battle_layout.addWidget(empty)
+    def initiate_trade(self) -> None:
+        target = self.player_dropdown.currentData()
+        if not target:
             return
-
-        for player in online_players:
-            self.online_battle_layout.addWidget(
-                PlayerActionCard(
-                    username=player["username"],
-                    creature_count=player["creature_count"],
-                    accent="#58C96B",
-                    button_text="Challenge",
-                    on_click=partial(self.create_battle, player["username"]),
-                )
-            )
-
-        self.online_battle_layout.addStretch(1)
-
-    def __init__(self, game_window: "GameWindow") -> None:
-        super().__init__(game_window)
-        self.current_battle_id: int | None = None
-        self.current_snapshot: dict | None = None
-
-        root = QVBoxLayout(self)
-        root.setSpacing(18)
-
-        hero_panel = QFrame()
-        hero_panel.setObjectName("heroPanel")
-        hero_layout = QGridLayout(hero_panel)
-        self.challenge_creature_combo = QComboBox()
-        refresh_button = QPushButton("Refresh Battles")
-        refresh_button.setObjectName("secondaryButton")
-        refresh_button.clicked.connect(self.refresh_page)
-        self.battle_status = QLabel()
-        self.battle_status.setWordWrap(True)
-        title = QLabel("PvP Battle Arena")
-        title.setObjectName("title")
-        helper = QLabel(
-            "Choose one creature to represent you, challenge an online player, and then lock one move per round until someone faints."
-        )
-        helper.setWordWrap(True)
-        helper.setObjectName("subtitle")
-        hero_layout.addWidget(title, 0, 0, 1, 2)
-        hero_layout.addWidget(helper, 1, 0, 1, 2)
-        hero_layout.addWidget(QLabel("Your Battle Creature"), 2, 0)
-        hero_layout.addWidget(self.challenge_creature_combo, 2, 1)
-        hero_layout.addWidget(refresh_button, 3, 0)
-        hero_layout.addWidget(self.battle_status, 3, 1)
-        root.addWidget(hero_panel)
-
-        body = QHBoxLayout()
-
-        online_panel = QFrame()
-        online_panel.setObjectName("panel")
-        online_layout = QVBoxLayout(online_panel)
-        online_title = QLabel("Online Players")
-        online_title.setObjectName("sectionTitle")
-        online_hint = QLabel("Challenge from the live list. The other player picks one defending creature when they accept.")
-        online_hint.setObjectName("subtitle")
-        online_hint.setWordWrap(True)
-        self.online_battle_scroll = QScrollArea()
-        self.online_battle_scroll.setWidgetResizable(True)
-        self.online_battle_container = QWidget()
-        self.online_battle_layout = QVBoxLayout(self.online_battle_container)
-        self.online_battle_layout.setSpacing(12)
-        self.online_battle_layout.setAlignment(Qt.AlignTop)
-        self.online_battle_scroll.setWidget(self.online_battle_container)
-        online_layout.addWidget(online_title)
-        online_layout.addWidget(online_hint)
-        online_layout.addWidget(self.online_battle_scroll)
-        body.addWidget(online_panel, 1)
-
-        battles_panel = QFrame()
-        battles_panel.setObjectName("panel")
-        battles_layout = QVBoxLayout(battles_panel)
-        battles_title = QLabel("Challenges & Battles")
-        battles_title.setObjectName("sectionTitle")
-        battles_hint = QLabel("Incoming requests stay near the top, followed by active and completed battles.")
-        battles_hint.setObjectName("subtitle")
-        battles_hint.setWordWrap(True)
-        self.battle_list = QListWidget()
-        self.battle_list.itemSelectionChanged.connect(self.on_battle_selected)
-        battles_layout.addWidget(battles_title)
-        battles_layout.addWidget(battles_hint)
-        battles_layout.addWidget(self.battle_list)
-        body.addWidget(battles_panel, 1)
-
-        detail_panel = QFrame()
-        detail_panel.setObjectName("panel")
-        detail_layout = QVBoxLayout(detail_panel)
-        self.battle_header = QLabel("Select or create a battle challenge.")
-        self.battle_header.setObjectName("sectionTitle")
-        self.battle_meta = QLabel()
-        self.battle_meta.setWordWrap(True)
-        detail_layout.addWidget(self.battle_header)
-        detail_layout.addWidget(self.battle_meta)
-
-        self.pending_panel = QFrame()
-        self.pending_panel.setObjectName("softPanel")
-        pending_layout = QHBoxLayout(self.pending_panel)
-        self.accept_creature_combo = QComboBox()
-        self.accept_button = QPushButton("Accept Challenge")
-        self.accept_button.setObjectName("successButton")
-        self.accept_button.clicked.connect(self.accept_battle)
-        self.cancel_button = QPushButton("Decline / Cancel")
-        self.cancel_button.setObjectName("dangerButton")
-        self.cancel_button.clicked.connect(self.cancel_battle)
-        pending_layout.addWidget(QLabel("Your Creature"))
-        pending_layout.addWidget(self.accept_creature_combo)
-        pending_layout.addWidget(self.accept_button)
-        pending_layout.addWidget(self.cancel_button)
-        detail_layout.addWidget(self.pending_panel)
-
-        battle_row = QHBoxLayout()
-        self.player_panel = self._combatant_panel("Your Creature")
-        self.opponent_panel = self._combatant_panel("Opponent")
-        battle_row.addWidget(self.player_panel[0])
-        battle_row.addWidget(self.opponent_panel[0])
-        detail_layout.addLayout(battle_row)
-
-        self.moves_panel = QFrame()
-        self.moves_panel.setObjectName("panel")
-        moves_layout = QGridLayout(self.moves_panel)
-        self.move_buttons: list[QPushButton] = []
-        for index in range(4):
-            button = QPushButton(f"Move {index + 1}")
-            button.clicked.connect(partial(self.submit_move, index))
-            button.setEnabled(False)
-            self.move_buttons.append(button)
-            moves_layout.addWidget(button, index // 2, index % 2)
-        detail_layout.addWidget(self.moves_panel)
-
-        action_row = QHBoxLayout()
-        self.forfeit_button = QPushButton("Forfeit Battle")
-        self.forfeit_button.setObjectName("dangerButton")
-        self.forfeit_button.clicked.connect(self.forfeit_battle)
-        action_row.addStretch(1)
-        action_row.addWidget(self.forfeit_button)
-        detail_layout.addLayout(action_row)
-
-        log_panel = QFrame()
-        log_panel.setObjectName("panel")
-        log_layout = QVBoxLayout(log_panel)
-        log_title = QLabel("Battle Log")
-        log_title.setObjectName("sectionTitle")
-        self.log_box = QTextEdit()
-        self.log_box.setReadOnly(True)
-        log_layout.addWidget(log_title)
-        log_layout.addWidget(self.log_box)
-        detail_layout.addWidget(log_panel)
-
-        body.addWidget(detail_panel, 2)
-        root.addLayout(body)
-
-     
-    def _combatant_panel(self, heading: str) -> tuple[QFrame, QLabel, QLabel, QProgressBar, QLabel, QLabel]:
-        panel = QFrame()
-        panel.setObjectName("panel")
-        layout = QVBoxLayout(panel)
-        title = QLabel(heading)
-        title.setObjectName("sectionTitle")
-        image = QLabel()
-        image.setAlignment(Qt.AlignCenter)
-        name = QLabel("No creature selected")
-        name.setAlignment(Qt.AlignCenter)
-        name.setStyleSheet("font-size: 18px; font-weight: 700;")
-        hp_bar = QProgressBar()
-        hp_text = QLabel("HP")
-        stats = QLabel("Stats")
-        stats.setWordWrap(True)
-        layout.addWidget(title)
-        layout.addWidget(image)
-        layout.addWidget(name)
-        layout.addWidget(hp_bar)
-        layout.addWidget(hp_text)
-        layout.addWidget(stats)
-        layout.addStretch(1)
-        return panel, image, name, hp_bar, hp_text, stats
-
-    def refresh_page(self) -> None:
-        user = self.game_window.current_user
-        if user is None:
-            return
-
-        def _get_page_data(user_id: int, username: str):
-            users = get_users()
-            creatures = inventory.get_inventory(username, sort_by="rarity")
-            battles = api.list_user_battles(user_id)
-            return users, creatures, battles
-
-        worker = Worker(_get_page_data, user.get("id"), user.get("username"))
-        worker.signals.finished.connect(self._on_page_data_fetched)
+        
+        self.status_label.setText(f"Sending request to {target}...")
+        self.status_label.setStyleSheet("color: #F2C14E;")
+        
+        worker = Worker(api.create_trade, self.game_window.current_user.get("id"), target)
+        worker.signals.finished.connect(self._on_trade_created)
+        worker.signals.error.connect(lambda e: status_message(self.status_label, str(e), "#F47C7C"))
         QThreadPool.globalInstance().start(worker)
 
-    def _set_battle_status(self, message: str, color: str) -> None:
-        status_message(self.battle_status, message, color)
-
-    def _on_page_data_fetched(self, data: tuple) -> None:
-        if not isinstance(data, tuple) or len(data) != 3:
-            return
-        users, creatures, battles = data
-        self._on_users_fetched(users)
-        self._on_user_creatures_fetched(creatures)
-        self._on_battle_list_fetched(battles)
-
-        if self.current_battle_id is not None:
-            self.load_battle_snapshot()
+    def _on_trade_created(self, snapshot: dict) -> None:
+        if snapshot.get("status") == "error":
+            status_message(self.status_label, snapshot.get("message", "Error"), "#F47C7C")
         else:
-            self.clear_battle_display()
-        self._set_battle_status("Choose a creature, then challenge someone from the online list.", "#9FB0C8")
+            status_message(self.status_label, "Request sent! Waiting for acceptance...", "#63D471")
 
-    def _on_user_creatures_fetched(self, creatures: list[dict]) -> None:
-        self.challenge_creature_combo.clear()
-        self.accept_creature_combo.clear()
-        for creature in creatures:
-            label = f"{creature['display_name']} | {creature['rarity']} | Lv {creature['level']}"
-            self.challenge_creature_combo.addItem(label, creature["id"])
-            self.accept_creature_combo.addItem(
-                f"{creature['display_name']} | {creature['rarity']} | Lv {creature['level']}",
-                creature["id"],
-            )
 
-    
-    def _on_battle_list_fetched(self, battles: list[dict]) -> None:
-        if not isinstance(battles, list):
-            return
+class FightingLobby(BasePage):
+    def __init__(self, game_window: "GameWindow") -> None:
+        super().__init__(game_window)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(25)
+        layout.setContentsMargins(40, 40, 40, 40)
+
+        hero = QFrame()
+        hero.setObjectName("heroPanel")
+        hero_layout = QVBoxLayout(hero)
+        hero_layout.setContentsMargins(30, 30, 30, 30)
+        
+        title = QLabel("Battle Arena")
+        title.setObjectName("title")
+        subtitle = QLabel("Challenge a rival to a tactical creature duel.")
+        subtitle.setObjectName("subtitle")
+        hero_layout.addWidget(title)
+        hero_layout.addWidget(subtitle)
+        layout.addWidget(hero)
+
+        selection_panel = QFrame()
+        selection_panel.setObjectName("panel")
+        sel_layout = QVBoxLayout(selection_panel)
+        sel_layout.setContentsMargins(30, 30, 30, 30)
+        sel_layout.setSpacing(20)
+
+        sel_layout.addWidget(QLabel("<b>CHOOSE YOUR CHAMPION</b>"))
+        self.creature_dropdown = QComboBox()
+        sel_layout.addWidget(self.creature_dropdown)
+
+        sel_layout.addWidget(QLabel("<b>SELECT OPPONENT</b>"))
+        self.player_dropdown = QComboBox()
+        self.player_dropdown.setPlaceholderText("Scanning for rivals...")
+        sel_layout.addWidget(self.player_dropdown)
+
+        self.send_request_button = QPushButton("Issue Challenge")
+        self.send_request_button.clicked.connect(self.initiate_battle)
+        sel_layout.addWidget(self.send_request_button)
+
+        self.status_label = QLabel("")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        sel_layout.addWidget(self.status_label)
+        
+        layout.addWidget(selection_panel)
+        
+        # Pending Challenges Section
+        pending_panel = QFrame()
+        pending_panel.setObjectName("panel")
+        pending_layout = QVBoxLayout(pending_panel)
+        pending_layout.setContentsMargins(30, 30, 30, 30)
+        pending_layout.setSpacing(10)
+        
+        pending_title = QLabel("<b>PENDING CHALLENGES</b>")
+        pending_layout.addWidget(pending_title)
+        
+        self.pending_list = QListWidget()
+        self.pending_list.setFixedHeight(180)
+        self.pending_list.itemDoubleClicked.connect(self._on_pending_clicked)
+        pending_layout.addWidget(self.pending_list)
+        
+        layout.addWidget(pending_panel)
+        layout.addStretch()
+
+    def refresh_page(self) -> None:
+        def _get_lobby_data(username: str, user_id: int):
+            users = get_users()
+            creatures = inventory.get_inventory(username, sort_by="rarity")
+            pending_battles = api.list_incoming_battle_requests(user_id)
+            return users, creatures, pending_battles
+
+        worker = Worker(_get_lobby_data, self.game_window.current_user.get("username"), self.game_window.current_user.get("id"))
+        worker.signals.finished.connect(self._on_data_fetched)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_data_fetched(self, data: tuple) -> None:
+        try:
+            if not self.isVisible() or not isinstance(data, tuple) or len(data) != 3:
+                return
             
-        selected_index = 0
-        self.battle_list.blockSignals(True)
-        self.battle_list.clear()
-        for index, battle in enumerate(battles):
-            status = battle.get("status")
-            if status == "pending":
-                relation = "Incoming" if battle.get("direction") == "incoming" else "Sent"
-            elif status == "active":
-                relation = "Active"
+            users, creatures, pending_battles = data
+            
+            # Populate Creatures
+            self.creature_dropdown.clear()
+            if not creatures:
+                self.creature_dropdown.addItem("No creatures found!", None)
+                self.creature_dropdown.setEnabled(False)
             else:
-                relation = str(status).title()
-            item = QListWidgetItem(f"{relation}  |  {battle.get('counterpart_username', 'Unknown')}")
-            item.setData(Qt.UserRole, battle.get("id"))
-            self.battle_list.addItem(item)
-            if battle.get("id") == self.current_battle_id:
-                selected_index = index
-        self.battle_list.blockSignals(False)
+                self.creature_dropdown.setEnabled(True)
+                for c in creatures:
+                    self.creature_dropdown.addItem(f"{c.get('display_name', '?')} (Lv {c.get('level', 1)})", c.get('id'))
+            
+            # Populate Players
+            self.player_dropdown.clear()
+            current_username = str(self.game_window.current_user.get("username", "")).strip().lower() if self.game_window.current_user else ""
+            online_count = 0
+            for user in users:
+                if not isinstance(user, dict): continue
+                username = user.get("username")
+                if not username: continue
+                
+                is_online = bool(user.get("online") or user.get("is_online"))
+                if username.strip().lower() != current_username and is_online:
+                    # Explicitly use the username string from the DB to avoid any confusion
+                    self.player_dropdown.addItem(f"Player: {username}", username)
+                    online_count += 1
+            
+            if online_count == 0:
+                self.player_dropdown.setPlaceholderText("No other rivals online.")
+                self.player_dropdown.setEnabled(False)
+            else:
+                self.player_dropdown.setEnabled(True)
+            
+            # Populate Pending Challenges
+            self.pending_list.clear()
+            if not pending_battles:
+                self.pending_list.addItem("No pending challenges.")
+            else:
+                for b in pending_battles:
+                    item = QListWidgetItem(f"⚔️ {b.get('from_username', 'Unknown')} has challenged you!")
+                    item.setData(Qt.UserRole, b)
+                    self.pending_list.addItem(item)
 
-        available_ids = {battle.get("id") for battle in battles}
-        if battles:
-            if self.current_battle_id not in available_ids:
-                self.current_battle_id = battles[0].get("id")
-                selected_index = 0
-            self.battle_list.setCurrentRow(selected_index)
-        else:
-            self.current_battle_id = None
+            can_fight = online_count > 0 and len(creatures) > 0
+            self.send_request_button.setEnabled(can_fight)
+            
+            if not can_fight:
+                msg = "Waiting for rivals..."
+                if len(creatures) == 0:
+                    msg = "Visit Summon Chamber first!"
+                elif online_count == 0:
+                    msg = "No other players online."
+                self.status_label.setText(msg)
+                self.status_label.setStyleSheet("color: #8B5E3C;")
+        except Exception as e:
+            print(f"[ERROR] FightingLobby data refresh failed: {e}")
 
-    def create_battle(self, opponent_username: str) -> None:
-        user = self.game_window.current_user
-        if user is None:
+    def _on_pending_clicked(self, item: QListWidgetItem) -> None:
+        request = item.data(Qt.UserRole)
+        if not isinstance(request, dict): return
+        
+        dialog = BattleRequestDialog(self.game_window, request)
+        dialog.exec_()
+        self.refresh_page()
+
+    def initiate_battle(self) -> None:
+        target = self.player_dropdown.currentData()
+        creature_id = self.creature_dropdown.currentData()
+        if not target or not creature_id:
             return
-        creature_id = self.challenge_creature_combo.currentData()
-        if creature_id is None:
-            self._set_battle_status("You need at least one creature to challenge another player.", "#F47C7C")
-            return
-
-        worker = Worker(api.create_battle, user.get("id"), opponent_username, creature_id)
+        
+        status_message(self.status_label, f"Challenging {target}...", "#F2C14E")
+        
+        worker = Worker(api.create_battle, self.game_window.current_user.get("id"), target, creature_id)
         worker.signals.finished.connect(self._on_battle_created)
-        worker.signals.error.connect(lambda e: self._set_battle_status(str(e), "#F47C7C"))
+        worker.signals.error.connect(lambda e: status_message(self.status_label, str(e), "#F47C7C"))
         QThreadPool.globalInstance().start(worker)
 
     def _on_battle_created(self, snapshot: dict) -> None:
-        if isinstance(snapshot, dict):
-            self.current_battle_id = snapshot.get("id")
-            self.refresh_page()
-            self.load_battle_snapshot()
-            self._set_battle_status("Battle challenge sent.", "#63D471")
-
-    def on_battle_selected(self) -> None:
-        item = self.battle_list.currentItem()
-        if item is None:
-            return
-        self.current_battle_id = item.data(Qt.UserRole)
-        self.load_battle_snapshot()
-
-    def clear_battle_display(self) -> None:
-        self.current_snapshot = None
-        self.battle_header.setText("Select or create a battle challenge.")
-        self.battle_meta.setText("")
-        self.pending_panel.hide()
-        self.moves_panel.hide()
-        self.forfeit_button.hide()
-        self.log_box.clear()
-        self._render_side(self.player_panel, None, None)
-        self._render_side(self.opponent_panel, None, None)
-        self._update_move_buttons()
-
-    def _render_side(self, widgets, creature_data: dict | None, state: dict | None) -> None:
-        _panel, image, name, hp_bar, hp_text, stats = widgets
-        if creature_data is None and state is None:
-            image.clear()
-            name.setText("No creature selected")
-            hp_bar.setMaximum(100)
-            hp_bar.setValue(0)
-            hp_bar.setFormat("")
-            hp_text.setText("HP")
-            stats.setText("Stats")
-            return
-
-        # FIX: Defensive dictionary access
-        image_path = creature_data.get("image_path") if creature_data else state.get("image_path")
-        display_name = creature_data.get("display_name") if creature_data else state.get("name", "Unknown")
-        rarity = creature_data.get("rarity") if creature_data else state.get("rarity", "Common")
-        level = creature_data.get("level") if creature_data else state.get("level", 1)
-        rarity_color = creature_data.get("rarity_color") if creature_data else RARITY_COLORS.get(rarity, "#FFFFFF")
-
-        image.setPixmap(load_pixmap(image_path, 140))
-        name.setText(f"{display_name} | {rarity} | Lv {level}")
-        name.setStyleSheet(f"font-size: 18px; font-weight: 700; color: {rarity_color};")
-
-        if state:
-            max_hp = state.get("max_hp", 100)
-            curr_hp = state.get("current_hp", 0)
-            hp_bar.setMaximum(max_hp)
-            hp_bar.setValue(curr_hp)
-            hp_bar.setFormat(f"{curr_hp} / {max_hp}")
-            stat_block = state.get("stats", {})
-            hp_value = curr_hp
+        if snapshot.get("status") == "error":
+            status_message(self.status_label, snapshot.get("message", "Error"), "#F47C7C")
         else:
-            base_hp = creature_data.get("stats", {}).get("HP", 100)
-            hp_bar.setMaximum(base_hp)
-            hp_bar.setValue(base_hp)
-            hp_bar.setFormat(f"{base_hp} / {base_hp}")
-            stat_block = creature_data.get("stats", {})
-            hp_value = base_hp
-            max_hp = base_hp
+            status_message(self.status_label, "Challenge issued! Waiting for acceptance...", "#63D471")
+
+
+class BattleRequestDialog(QDialog):
+    def __init__(self, parent: "GameWindow", request: dict) -> None:
+        super().__init__(parent)
+        self.game_window = parent
+        self.request = request
+        self.setWindowTitle("Battle Challenge")
+        self.setFixedWidth(400)
+        self.setStyleSheet(APP_STYLESHEET)
         
-        hp_text.setText("Hit Points")
-        stats.setText(
-            f"HP {hp_value}/{max_hp}  |  Attack {stat_block.get('Attack', 0)}  |  "
-            f"Defense {stat_block.get('Defense', 0)}  |  Speed {stat_block.get('Speed', 0)}"
-        )
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel(f"⚔️ <b>{request['from_username']}</b> has challenged you!"))
+        layout.addWidget(QLabel("Select your defender:"))
+        
+        self.creature_combo = QComboBox()
+        self.creature_combo.addItem("Fetching creatures...")
+        self.creature_combo.setEnabled(False)
+        layout.addWidget(self.creature_combo)
+        
+        btns = QHBoxLayout()
+        self.fight_btn = QPushButton("FIGHT")
+        self.fight_btn.setEnabled(False)
+        self.decline_btn = QPushButton("DECLINE")
+        btns.addWidget(self.fight_btn)
+        btns.addWidget(self.decline_btn)
+        layout.addLayout(btns)
+        
+        self.fight_btn.clicked.connect(self.accept_fight)
+        self.decline_btn.clicked.connect(self.reject)
+        
+        # Start inventory fetch
+        self.worker = Worker(inventory.get_inventory, self.game_window.current_user["username"])
+        self.worker.signals.finished.connect(self._on_inventory_fetched)
+        QThreadPool.globalInstance().start(self.worker)
+
+    def _on_inventory_fetched(self, creatures: list[dict]) -> None:
+        # Check if dialog still exists (PyQt object might be deleted)
+        try:
+            if not self.isVisible(): return
+            self.creature_combo.clear()
+            self.creature_combo.setEnabled(True)
+            if not creatures:
+                self.creature_combo.addItem("No creatures found!")
+                return
+            
+            for c in creatures:
+                self.creature_combo.addItem(f"{c['display_name']} (Lv {c['level']})", c['id'])
+            self.fight_btn.setEnabled(True)
+        except RuntimeError: # C++ object deleted
+            pass
+
+    def accept_fight(self) -> None:
+        c_id = self.creature_combo.currentData()
+        if not c_id: return
+        
+        self.fight_btn.setEnabled(False)
+        self.fight_btn.setText("PREPARING...")
+        
+        # We start the accept worker. If it finishes, we'll open the dialog and close this one.
+        worker = Worker(api.accept_battle, self.request["id"], self.game_window.current_user["id"], c_id)
+        worker.signals.finished.connect(self._on_accepted)
+        worker.signals.error.connect(lambda e: show_error(self, str(e)))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_accepted(self, snap: dict) -> None:
+        try:
+            if snap.get("id"):
+                self.game_window.launch_battle_dialog(snap["id"])
+            self.accept()
+        except RuntimeError:
+            pass
+
+
+class TradeDialog(QDialog):
+    def __init__(self, parent: "GameWindow", trade_id: int) -> None:
+        super().__init__(parent)
+        self.game_window = parent
+        self.trade_id = trade_id
+        self.current_snapshot = None
+        self.user_inventory = []
+        
+        self.setWindowTitle("Creature Trading Interface")
+        self.setFixedSize(1000, 750)
+        self.setModal(True)
+        
+        # Apply global style to dialog
+        self.setStyleSheet(APP_STYLESHEET)
+        
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        
+        # Header Area (Stone-like)
+        header = QFrame()
+        header.setObjectName("heroPanel")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(20, 15, 20, 15)
+        self.title_label = QLabel("Active Trade")
+        self.title_label.setObjectName("title")
+        self.title_label.setStyleSheet("font-size: 24px;")
+        header_layout.addWidget(self.title_label)
+        header_layout.addStretch()
+        self.close_btn = QPushButton("CANCEL TRADE")
+        self.close_btn.setObjectName("dangerButton")
+        self.close_btn.clicked.connect(self.cancel_trade)
+        header_layout.addWidget(self.close_btn)
+        root.addWidget(header)
+        
+        # Main Body (Parchment-like)
+        body = QFrame()
+        body.setObjectName("parchmentPanel")
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(25, 25, 25, 25)
+        body_layout.setSpacing(25)
+        
+        # Left: Your Offer
+        left_side = QVBoxLayout()
+        left_side.addWidget(QLabel("<b>YOUR OFFER</b>"))
+        self.your_creatures_list = QListWidget()
+        left_side.addWidget(self.your_creatures_list)
+        
+        self.your_token_spin = QSpinBox()
+        self.your_token_spin.setMaximum(99999999) # Set a high limit
+        self.your_token_spin.setPrefix("Tokens: ")
+        self.your_token_spin.valueChanged.connect(self.update_token_offer)
+        left_side.addWidget(self.your_token_spin)
+        
+        self.confirm_btn = QPushButton("CONFIRM OFFER")
+        self.confirm_btn.clicked.connect(self.confirm_trade)
+        left_side.addWidget(self.confirm_btn)
+        body_layout.addLayout(left_side, 1)
+        
+        # Middle: Inventory to Add
+        mid_side = QVBoxLayout()
+        mid_side.addWidget(QLabel("<b>YOUR COLLECTION</b>"))
+        self.inventory_list = QListWidget()
+        mid_side.addWidget(self.inventory_list)
+        self.add_btn = QPushButton("ADD SELECTED")
+        self.add_btn.clicked.connect(self.add_creature)
+        mid_side.addWidget(self.add_btn)
+        self.remove_btn = QPushButton("REMOVE SELECTED")
+        self.remove_btn.clicked.connect(self.remove_creature)
+        mid_side.addWidget(self.remove_btn)
+        body_layout.addLayout(mid_side, 1)
+        
+        # Right: Their Offer
+        right_side = QVBoxLayout()
+        right_side.addWidget(QLabel("<b>THEIR OFFER</b>"))
+        self.their_creatures_list = QListWidget()
+        right_side.addWidget(self.their_creatures_list)
+        self.their_token_label = QLabel("Tokens: 0")
+        right_side.addWidget(self.their_token_label)
+        
+        self.status_msg = QLabel("Waiting for confirmation...")
+        self.status_msg.setAlignment(Qt.AlignCenter)
+        self.status_msg.setStyleSheet("font-style: italic; color: #4E3B24;")
+        right_side.addWidget(self.status_msg)
+        body_layout.addLayout(right_side, 1)
+        
+        root.addWidget(body)
+        
+        # Polling Timer
+        self.poll_timer = QTimer(self)
+        self.poll_timer.timeout.connect(self.refresh_trade)
+        self.poll_timer.start(2000)
+        
+        self.refresh_trade()
+
+    def refresh_trade(self) -> None:
+        if not self.game_window.current_user: return
+        def _get_trade_data(trade_id: int, user_id: int, username: str):
+            snapshot = api.get_trade(trade_id, user_id)
+            user_inventory = inventory.get_inventory(username, sort_by="rarity")
+            return snapshot, user_inventory
+
+        worker = Worker(_get_trade_data, self.trade_id, self.game_window.current_user['id'], self.game_window.current_user['username'])
+        worker.signals.finished.connect(self._on_data_fetched)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_data_fetched(self, data: tuple) -> None:
+        try:
+            if not self.isVisible(): return
+            snapshot, inv = data
+            self.current_snapshot = snapshot
+            self.user_inventory = inv
+            
+            if snapshot.get("status") == "completed":
+                self.poll_timer.stop()
+                QMessageBox.information(self, "Trade Executed", "The trade has been completed successfully!")
+                self.accept()
+                return
+            
+            if snapshot.get("status") in ("cancelled", "declined"):
+                self.poll_timer.stop()
+                QMessageBox.warning(self, "Trade Ended", "This trade has been cancelled or declined.")
+                self.reject()
+                return
+
+            self.render_snapshot()
+        except (RuntimeError, TypeError, KeyError):
+            pass
 
     def render_snapshot(self) -> None:
-        snapshot = self.current_snapshot
-        if snapshot is None:
-            self.clear_battle_display()
-            return
-
-        your_side = snapshot.get("your_side")
-        their_side = snapshot.get("their_side")
-        if not your_side or not their_side:
-            return
-
-        self.battle_header.setText(f"Battle with {their_side.get('username')}")
-        self.battle_meta.setText(self._describe_snapshot(snapshot))
-        self.pending_panel.setVisible(snapshot.get("status") == "pending")
-        self.accept_creature_combo.setEnabled(snapshot.get("can_accept"))
+        snap = self.current_snapshot
+        if not snap or "your_side" not in snap: return
+        your_side = snap['your_side']
+        their_side = snap['their_side']
         
-        # Populate creatures for acceptance (if needed)
-        self.accept_creature_combo.clear()
-        creatures = getattr(self, "user_inventory", [])
-        for creature in creatures:
-            self.accept_creature_combo.addItem(
-                f"{creature.get('display_name')} | {creature.get('rarity')} | Lv {creature.get('level')}",
-                creature.get("id")
-            )
+        self.title_label.setText(f"Trading with {their_side.get('username', 'Unknown')}")
+        
+        # Update Your Offer
+        self.your_creatures_list.clear()
+        for c in your_side.get('creatures', []):
+            self.your_creatures_list.addItem(f"{c.get('display_name', '?')} (Lv {c.get('level', 1)})")
+        
+        # Update Their Offer
+        self.their_creatures_list.clear()
+        for c in their_side.get('creatures', []):
+            self.their_creatures_list.addItem(f"{c.get('display_name', '?')} (Lv {c.get('level', 1)})")
+        self.their_token_label.setText(f"Tokens: {their_side.get('tokens', 0)}")
+        
+        # Update Inventory
+        self.inventory_list.clear()
+        offered_ids = {c.get('id') for c in your_side.get('creatures', [])}
+        for c in self.user_inventory:
+            if c.get('id') not in offered_ids:
+                self.inventory_list.addItem(f"{c.get('display_name', '?')} (Lv {c.get('level', 1)})")
+                self.inventory_list.item(self.inventory_list.count()-1).setData(Qt.UserRole, c.get('id'))
 
-        self.accept_button.setVisible(snapshot.get("can_accept"))
-        self.cancel_button.setVisible(snapshot.get("can_cancel"))
-        self.moves_panel.setVisible(snapshot.get("status") == "active")
-        self.forfeit_button.setVisible(snapshot.get("can_forfeit"))
-        self._render_side(self.player_panel, your_side.get("creature"), your_side.get("combatant"))
-        self._render_side(self.opponent_panel, their_side.get("creature"), their_side.get("combatant"))
-        self.log_box.setPlainText("\n".join(snapshot.get("log", [])))
+        # Status & Buttons
+        is_confirmed = your_side.get('confirmed', False)
+        if is_confirmed:
+            self.confirm_btn.setText("OFFER LOCKED")
+            self.confirm_btn.setEnabled(False)
+            self.add_btn.setEnabled(False)
+            self.remove_btn.setEnabled(False)
+            self.your_token_spin.setEnabled(False)
+        else:
+            self.confirm_btn.setText("CONFIRM OFFER")
+            self.confirm_btn.setEnabled(True)
+            self.add_btn.setEnabled(True)
+            self.remove_btn.setEnabled(True)
+            self.your_token_spin.setEnabled(True)
+
+        status_text = "Waiting for partner..."
+        if is_confirmed and their_side.get('confirmed', False):
+            status_text = "Executing trade..."
+        elif is_confirmed:
+            status_text = "Waiting for their confirmation..."
+        elif their_side.get('confirmed', False):
+            status_text = f"{their_side.get('username', 'Partner')} HAS CONFIRMED!"
+            
+        self.status_msg.setText(status_text)
+
+    def add_creature(self) -> None:
+        item = self.inventory_list.currentItem()
+        if not item: return
+        worker = Worker(api.add_creature_to_trade, self.trade_id, self.game_window.current_user['id'], item.data(Qt.UserRole))
+        worker.signals.finished.connect(self.refresh_trade)
+        QThreadPool.globalInstance().start(worker)
+
+    def remove_creature(self) -> None:
+        if not self.current_snapshot or not self.current_snapshot['your_side']['creatures']: return
+        c_id = self.current_snapshot['your_side']['creatures'][0]['id']
+        worker = Worker(api.remove_creature_from_trade, self.trade_id, self.game_window.current_user['id'], c_id)
+        worker.signals.finished.connect(self.refresh_trade)
+        QThreadPool.globalInstance().start(worker)
+
+    def update_token_offer(self) -> None:
+        worker = Worker(api.set_trade_tokens, self.trade_id, self.game_window.current_user['id'], self.your_token_spin.value())
+        worker.signals.finished.connect(self.refresh_trade)
+        QThreadPool.globalInstance().start(worker)
+
+    def confirm_trade(self) -> None:
+        worker = Worker(api.confirm_trade, self.trade_id, self.game_window.current_user['id'])
+        worker.signals.finished.connect(self.refresh_trade)
+        QThreadPool.globalInstance().start(worker)
+
+    def cancel_trade(self) -> None:
+        worker = Worker(api.cancel_trade, self.trade_id, self.game_window.current_user['id'])
+        worker.signals.finished.connect(self.reject)
+        QThreadPool.globalInstance().start(worker)
+
+
+class BattleDialog(QDialog):
+    def __init__(self, parent: "GameWindow", battle_id: int) -> None:
+        super().__init__(parent)
+        self.game_window = parent
+        self.battle_id = battle_id
+        self.current_snapshot = None
+        
+        self.setWindowTitle("Battle Arena")
+        self.setFixedSize(1100, 800)
+        self.setModal(True)
+        self.setStyleSheet(APP_STYLESHEET)
+        
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        
+        # Header Area
+        header = QFrame()
+        header.setObjectName("heroPanel")
+        header_layout = QHBoxLayout(header)
+        self.title_label = QLabel("Battle Initiated")
+        self.title_label.setObjectName("title")
+        header_layout.addWidget(self.title_label)
+        header_layout.addStretch()
+        self.forfeit_btn = QPushButton("FORFEIT")
+        self.forfeit_btn.setObjectName("dangerButton")
+        self.forfeit_btn.clicked.connect(self.forfeit_battle)
+        header_layout.addWidget(self.forfeit_btn)
+        root.addWidget(header)
+        
+        # Arena Area
+        arena = QFrame()
+        arena.setObjectName("panel")
+        arena_layout = QHBoxLayout(arena)
+        arena_layout.setContentsMargins(30, 30, 30, 30)
+        
+        # Player Side
+        self.player_side = self._create_combatant_ui("YOU")
+        arena_layout.addLayout(self.player_side['layout'], 1)
+        
+        # VS Label
+        vs = QLabel("VS")
+        vs.setStyleSheet("font-size: 48px; font-weight: 900; color: #8B5E3C;")
+        arena_layout.addWidget(vs)
+        
+        # Opponent Side
+        self.opponent_side = self._create_combatant_ui("OPPONENT")
+        arena_layout.addLayout(self.opponent_side['layout'], 1)
+        
+        root.addWidget(arena, 2)
+        
+        # Moves & Log
+        bottom = QHBoxLayout()
+        bottom.setContentsMargins(20, 20, 20, 20)
+        bottom.setSpacing(20)
+        
+        # Moves
+        moves_frame = QFrame()
+        moves_frame.setObjectName("parchmentPanel")
+        self.moves_layout = QGridLayout(moves_frame)
+        self.move_btns = []
+        for i in range(4):
+            btn = QPushButton(f"MOVE {i+1}")
+            btn.setFixedSize(200, 80)
+            btn.clicked.connect(partial(self.submit_move, i))
+            self.move_btns.append(btn)
+            self.moves_layout.addWidget(btn, i//2, i%2)
+        bottom.addWidget(moves_frame, 1)
+        
+        # Log
+        log_frame = QFrame()
+        log_frame.setObjectName("panel")
+        log_layout = QVBoxLayout(log_frame)
+        log_layout.addWidget(QLabel("<b>BATTLE CHRONICLE</b>"))
+        self.log_box = QTextEdit()
+        self.log_box.setReadOnly(True)
+        self.log_box.setStyleSheet("background: #1A120B; color: #AEBBD0; border: none;")
+        log_layout.addWidget(self.log_box)
+        bottom.addWidget(log_frame, 1)
+        
+        root.addLayout(bottom, 1)
+        
+        self.poll_timer = QTimer(self)
+        self.poll_timer.timeout.connect(self.refresh_battle)
+        self.poll_timer.start(1500)
+        
+        self.refresh_battle()
+
+    def _create_combatant_ui(self, label: str):
+        layout = QVBoxLayout()
+        layout.setAlignment(Qt.AlignCenter)
+        
+        title = QLabel(label)
+        title.setAlignment(Qt.AlignCenter)
+        title.setStyleSheet("font-size: 18px; font-weight: 800; color: #C19A6B;")
+        
+        img = QLabel()
+        img.setFixedSize(200, 200)
+        img.setStyleSheet("background: rgba(255,255,255,0.05); border-radius: 100px; border: 4px solid #4E3B24;")
+        img.setAlignment(Qt.AlignCenter)
+        
+        name = QLabel("-")
+        name.setAlignment(Qt.AlignCenter)
+        name.setStyleSheet("font-size: 22px; font-weight: 800;")
+        
+        hp_bar = QProgressBar()
+        hp_bar.setFixedWidth(300)
+        hp_bar.setFixedHeight(30)
+        
+        stats = QLabel("-")
+        stats.setAlignment(Qt.AlignCenter)
+        
+        layout.addWidget(title)
+        layout.addWidget(img)
+        layout.addWidget(name)
+        layout.addWidget(hp_bar)
+        layout.addWidget(stats)
+        
+        return {'layout': layout, 'img': img, 'name': name, 'hp': hp_bar, 'stats': stats}
+
+    def refresh_battle(self) -> None:
+        if not self.game_window.current_user: return
+        worker = Worker(api.get_battle, self.battle_id, self.game_window.current_user['id'])
+        worker.signals.finished.connect(self._on_snapshot_fetched)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_snapshot_fetched(self, snapshot: dict) -> None:
+        try:
+            if not self.isVisible(): return
+            self.current_snapshot = snapshot
+            
+            if snapshot.get("status") == "completed":
+                self.poll_timer.stop()
+                self.render_snapshot()
+                winner = "YOU WON!" if snapshot.get("you_won") else "YOU LOST!"
+                QMessageBox.information(self, "Battle Over", f"The battle has concluded. {winner}")
+                self.accept()
+                return
+                
+            self.render_snapshot()
+        except (RuntimeError, TypeError, KeyError):
+            pass
+
+    def render_snapshot(self) -> None:
+        snap = self.current_snapshot
+        if not snap or "your_side" not in snap: return
+        your = snap['your_side']
+        their = snap['their_side']
+        
+        self.title_label.setText(f"Dueling {their.get('username', 'Opponent')}")
+        
+        # Render Sides
+        self._render_side(self.player_side, your)
+        self._render_side(self.opponent_side, their)
+        
+        # Log
+        self.log_box.setPlainText("\n".join(snap.get("log", [])))
         self.log_box.verticalScrollBar().setValue(self.log_box.verticalScrollBar().maximum())
-        self._update_move_buttons()
-
-    def _update_move_buttons(self) -> None:
-        move_options = self.current_snapshot.get("your_move_options", []) if self.current_snapshot else []
-        pending_move = self.current_snapshot.get("your_pending_move") if self.current_snapshot else None
-        active = bool(self.current_snapshot and self.current_snapshot.get("can_submit_moves"))
-
-        if not move_options:
-            for button in self.move_buttons:
-                button.setEnabled(False)
-                button.setText("Move Slot")
-            return
-
-        for index, button in enumerate(self.move_buttons):
-            if index >= len(move_options):
-                button.setEnabled(False)
-                button.setText("Locked")
-                continue
-
-            move = move_options[index]
-            suffix = "Ready" if move.get("available") else f"Ready in {move.get('remaining_cooldown', 0)}"
-            button = self.move_buttons[index]
-            button.setText(f"{move.get('name', 'Move')}\nDMG {move.get('damage', 0)} | CD {move.get('cooldown', 0)} | {suffix}")
-            button.setEnabled(active and pending_move is None and move.get("available", False))
-
-    def _describe_snapshot(self, snapshot: dict) -> str:
-        their_side = snapshot.get("their_side")
-        if not their_side:
-            return "Loading battle data..."
-            
-        status = snapshot.get("status")
-        if status == "pending":
-            if snapshot.get("can_accept"):
-                return (
-                    f"Incoming battle request from {their_side.get('username', 'Opponent')}. "
-                    "Choose one creature to represent you, then accept or decline."
-                )
-            return f"Battle request sent to {their_side.get('username', 'Opponent')}. Waiting for them to lock in one creature."
         
-        if status == "active":
-            pending_move = snapshot.get("your_pending_move")
-            if pending_move:
-                return f"You locked in {pending_move}. Waiting for {their_side.get('username', 'Opponent')}."
-            if snapshot.get("their_move_submitted"):
-                return f"{their_side.get('username', 'Opponent')} is ready. Choose your move for round {snapshot.get('round_number', 0) + 1}."
-            return f"Round {snapshot.get('round_number', 0) + 1}. Both players choose a move."
+        # Moves
+        options = snap.get("your_move_options", [])
+        can_move = snap.get("can_submit_moves") and not snap.get("your_pending_move")
         
-        if status == "completed":
-            you_won = snapshot.get("you_won")
-            if you_won is True:
-                return f"Battle complete. You defeated {their_side.get('username', 'Opponent')}."
-            if you_won is False:
-                return f"Battle complete. {their_side.get('username', 'Opponent')} won this battle."
-            return "Battle complete."
-            
-        return "This battle is no longer active."
+        for i, btn in enumerate(self.move_btns):
+            if i < len(options):
+                move = options[i]
+                btn.setText(f"{move.get('name', 'Move')}\nDMG {move.get('damage', 0)}")
+                btn.setEnabled(can_move and move.get('available', False))
+                if not move.get('available'):
+                    btn.setText(f"CD: {move.get('remaining_cooldown', 0)}")
+            else:
+                btn.setText("LOCKED")
+                btn.setEnabled(False)
 
-    def accept_battle(self) -> None:
-        if self.current_battle_id is None:
-            return
+    def _render_side(self, ui, side):
+        if not side: return
+        creature = side.get("creature")
+        combatant = side.get("combatant")
+        username = side.get("username", "Unknown")
+        if not creature: return
+        
+        ui['img'].setPixmap(load_pixmap(creature.get('image_path', ''), 180))
+        ui['name'].setText(f"{username}'s {creature.get('display_name', '?')}\n(Lv {creature.get('level', 1)})")
+        ui['name'].setStyleSheet(f"color: {creature.get('rarity_color', '#FFFFFF')}; font-size: 18px; font-weight: 800;")
+        
+        if combatant:
+            ui['hp'].setMaximum(combatant.get('max_hp', 100))
+            ui['hp'].setValue(combatant.get('current_hp', 0))
+            ui['hp'].setFormat(f"{combatant.get('current_hp', 0)} / {combatant.get('max_hp', 100)} HP")
+            stats = combatant.get('stats', {})
+            ui['stats'].setText(f"ATK {stats.get('Attack', 0)} | DEF {stats.get('Defense', 0)} | SPD {stats.get('Speed', 0)}")
+        else:
+            stats = creature.get('stats', {})
+            hp = stats.get('HP', 100)
+            ui['hp'].setMaximum(hp)
+            ui['hp'].setValue(hp)
+            ui['hp'].setFormat(f"{hp} / {hp} HP")
+            ui['stats'].setText(f"ATK {stats.get('Attack', 0)} | DEF {stats.get('Defense', 0)} | SPD {stats.get('Speed', 0)}")
+
+    def submit_move(self, index: int) -> None:
+        if not self.current_snapshot or "your_move_options" not in self.current_snapshot: return
+        options = self.current_snapshot['your_move_options']
+        if index >= len(options): return
+        move = options[index]['name']
+        worker = Worker(api.submit_move, self.battle_id, self.game_window.current_user['id'], move)
+        worker.signals.finished.connect(self.refresh_battle)
+        QThreadPool.globalInstance().start(worker)
+
+    def forfeit_battle(self) -> None:
+        worker = Worker(api.forfeit_battle, self.battle_id, self.game_window.current_user['id'])
+        worker.signals.finished.connect(self.reject)
+        QThreadPool.globalInstance().start(worker)
+
+
+# Removed old FightingPage as it's replaced by FightingLobby and BattleDialog
         creature_id = self.accept_creature_combo.currentData()
         if creature_id is None:
             self._set_battle_status("You need a creature to accept the battle.", "#F47C7C")
@@ -2044,25 +1819,28 @@ class ProfilePage(BasePage):
         QThreadPool.globalInstance().start(worker)
 
     def _on_profile_data_fetched(self, data: tuple) -> None:
-        user = self.game_window.current_user
-        if user is None or not isinstance(data, tuple) or len(data) != 3:
-            return
-            
-        summary, trades, top_creatures = data
-        open_trades = sum(1 for trade_row in trades if trade_row.get("status") in {"pending", "open"})
+        try:
+            user = self.game_window.current_user
+            if user is None or not isinstance(data, tuple) or len(data) != 3 or not self.isVisible():
+                return
+                
+            summary, trades, top_creatures = data
+            open_trades = sum(1 for trade_row in trades if trade_row.get("status") in {"pending", "open"})
 
-        self.username_label.setText(user.get("username", "Profile"))
-        self.tokens_label.setText(f"Tokens: {user.get('tokens', 0)}")
-        self.collection_label.setText(f"Creatures: {summary.get('count', 0)}")
-        self.value_label.setText(f"Collection Value: {summary.get('total_value', 0)}")
-        self.rarity_label.setText(f"Highest Rarity: {summary.get('highest_rarity', 'None')}")
-        self.trade_label.setText(f"Trade Activity: {open_trades}")
+            self.username_label.setText(user.get("username", "Profile"))
+            self.tokens_label.setText(f"Tokens: {user.get('tokens', 0)}")
+            self.collection_label.setText(f"Creatures: {summary.get('count', 0)}")
+            self.value_label.setText(f"Collection Value: {summary.get('total_value', 0)}")
+            self.rarity_label.setText(f"Highest Rarity: {summary.get('highest_rarity', 'None')}")
+            self.trade_label.setText(f"Trade Activity: {open_trades}")
 
-        self.top_list.clear()
-        for creature in top_creatures:
-            self.top_list.addItem(
-                f"{creature.get('display_name')} | {creature.get('rarity')} | Lv {creature.get('level')} | Value {creature.get('value')}"
-            )
+            self.top_list.clear()
+            for creature in top_creatures:
+                self.top_list.addItem(
+                    f"{creature.get('display_name')} | {creature.get('rarity')} | Lv {creature.get('level')} | Value {creature.get('value')}"
+                )
+        except RuntimeError:
+            pass
 
 
 class GameWindow(QMainWindow):
@@ -2077,6 +1855,8 @@ class GameWindow(QMainWindow):
 
         # FIX: Replace unreliable presence_timer with HeartbeatWorker
         self.heartbeat_worker = None
+        self.last_battle_statuses: dict[int, str] = {}
+        self.last_trade_statuses: dict[int, str] = {}
 
         self.notification_timer = QTimer(self)
         self.notification_timer.setInterval(3500)
@@ -2151,8 +1931,8 @@ class GameWindow(QMainWindow):
             "dashboard": DashboardPage(self),
             "crate": CratePage(self),
             "inventory": InventoryPage(self),
-            "trading": TradingPage(self),
-            "fighting": FightingPage(self),
+            "trading": TradingLobby(self),
+            "fighting": FightingLobby(self),
             "profile": ProfilePage(self),
         }
         for page in self.pages.values():
@@ -2160,6 +1940,32 @@ class GameWindow(QMainWindow):
 
         self.root_stack.addWidget(self.app_shell)
         self.root_stack.setCurrentWidget(self.auth_page)
+        
+        # Track active dialogs to prevent duplicates
+        self.active_trade_dialogs: dict[int, TradeDialog] = {}
+        self.active_battle_dialogs: dict[int, BattleDialog] = {}
+
+    def launch_trade_dialog(self, trade_id: int) -> None:
+        if trade_id in self.active_trade_dialogs:
+            self.active_trade_dialogs[trade_id].raise_()
+            self.active_trade_dialogs[trade_id].activateWindow()
+            return
+            
+        dialog = TradeDialog(self, trade_id)
+        self.active_trade_dialogs[trade_id] = dialog
+        dialog.finished.connect(lambda: self.active_trade_dialogs.pop(trade_id, None))
+        dialog.show()
+
+    def launch_battle_dialog(self, battle_id: int) -> None:
+        if battle_id in self.active_battle_dialogs:
+            self.active_battle_dialogs[battle_id].raise_()
+            self.active_battle_dialogs[battle_id].activateWindow()
+            return
+            
+        dialog = BattleDialog(self, battle_id)
+        self.active_battle_dialogs[battle_id] = dialog
+        dialog.finished.connect(lambda: self.active_battle_dialogs.pop(battle_id, None))
+        dialog.show()
 
     def set_current_user(self, user: dict) -> None:
         self.seen_trade_notifications.clear()
@@ -2212,19 +2018,23 @@ class GameWindow(QMainWindow):
         self.current_user["tokens"] = int(user_meta.get("tokens", self.current_user.get("tokens", 0)) or 0)
         self.current_user["real_name"] = user_meta.get("real_name", self.current_user.get("real_name", ""))
         self.current_user["email"] = user_meta.get("email", self.current_user.get("email", ""))
+        if "id" in user_meta and user_meta["id"]:
+            self.current_user["id"] = user_meta["id"]
 
         self.session_label.setText(f"Player: {self.current_user['username']}")
         self.balance_label.setText(f"Tokens: {self.current_user['tokens']}")
 
-        online_count = sum(1 for u in users if u.get("online"))
+        online_count = sum(1 for u in users if u.get("is_online"))
 
         try:
-            incoming_trades = len(api.list_incoming_trade_requests(self.current_user.get("id")))
+            id_to_check = self.current_user.get("id")
+            print(f"[DEBUG] Refreshing session for {self.current_user.get('username')} (ID: {id_to_check})")
+            incoming_trades = len(api.list_incoming_trade_requests(id_to_check))
         except Exception as e:
             print(f"[ERROR] Failed to list incoming trades: {e}")
             incoming_trades = 0
         try:
-            incoming_battles = len(api.list_incoming_battle_requests(self.current_user.get("id")))
+            incoming_battles = len(api.list_incoming_battle_requests(id_to_check))
         except Exception as e:
             print(f"[ERROR] Failed to list incoming battles: {e}")
             incoming_battles = 0
@@ -2253,13 +2063,26 @@ class GameWindow(QMainWindow):
         if self.current_user is None or self.root_stack.currentWidget() is self.auth_page:
             return
         
+        user_id = self.current_user.get("id")
+        
+        # FIX: Also trigger a refresh on the active page if it's trading or fighting
+        # This ensures that both players see status changes (e.g., when a request is accepted)
+        current_page = self.page_stack.currentWidget()
+        if current_page in (self.pages.get("trading"), self.pages.get("fighting")):
+            current_page.refresh_page()
+        
         # FIX: Move notification fetching to a worker thread
-        def fetch_notifications(user_id: int):
-            trades = api.list_incoming_trade_requests(user_id)
-            battles = api.list_incoming_battle_requests(user_id)
-            return trades, battles
+        def fetch_notifications(uid: int):
+            incoming_trades = api.list_incoming_trade_requests(uid)
+            incoming_battles = api.list_incoming_battle_requests(uid)
+            
+            # Fetch full lists to detect status changes for outgoing requests
+            all_trades = api.list_user_trades(uid)
+            all_battles = api.list_user_battles(uid)
+            
+            return incoming_trades, incoming_battles, all_trades, all_battles
 
-        worker = Worker(fetch_notifications, self.current_user.get("id"))
+        worker = Worker(fetch_notifications, user_id)
         worker.signals.finished.connect(self._on_notifications_fetched)
         QThreadPool.globalInstance().start(worker)
         
@@ -2267,68 +2090,67 @@ class GameWindow(QMainWindow):
         self.refresh_session()
 
     def _on_notifications_fetched(self, data: tuple) -> None:
-        if self.current_user is None or not isinstance(data, tuple) or len(data) != 2:
+        if self.current_user is None or not isinstance(data, tuple) or len(data) != 4:
             return
             
-        trades, battles = data
-        for request in trades:
+        incoming_trades, incoming_battles, all_trades, all_battles = data
+        
+        # 1. Handle NEW incoming requests
+        for request in incoming_trades:
             if request.get("id") in self.seen_trade_notifications:
                 continue
             self.seen_trade_notifications.add(request.get("id"))
             self._handle_trade_request_popup(request)
 
-        for request in battles:
-            if request.get("id") in self.seen_battle_notifications:
+        # 2. Detect transitions from 'pending' to 'active' or 'open' for outgoing requests
+        for trade in all_trades:
+            trade_id = trade.get("id")
+            if trade_id is None:
                 continue
-            self.seen_battle_notifications.add(request.get("id"))
-            self._handle_battle_request_popup(request)
+            status = trade.get("status")
+            old_status = self.last_trade_statuses.get(trade_id)
+            
+            if old_status == "pending" and status == "open":
+                # Trade just became active!
+                self.launch_trade_dialog(trade_id)
+            
+            self.last_trade_statuses[trade_id] = status
+
+        for battle in all_battles:
+            battle_id = battle.get("id")
+            if battle_id is None:
+                continue
+            status = battle.get("status")
+            old_status = self.last_battle_statuses.get(battle_id)
+            
+            if old_status == "pending" and status == "active":
+                # Battle just became active!
+                self.launch_battle_dialog(battle_id)
+            
+            self.last_battle_statuses[battle_id] = status
 
     def _handle_trade_request_popup(self, request: dict) -> None:
         message_box = QMessageBox(self)
         message_box.setWindowTitle("Trade Request")
-        message_box.setText(f"{request['from_username']} sent you a trade request.")
-        accept_button = message_box.addButton("Accept", QMessageBox.AcceptRole)
-        decline_button = message_box.addButton("Decline", QMessageBox.RejectRole)
-        later_button = message_box.addButton("Later", QMessageBox.ActionRole)
+        message_box.setText(f"📜 {request['from_username']} has sent you a trade request scroll.")
+        accept_button = message_box.addButton("ACCEPT", QMessageBox.AcceptRole)
+        decline_button = message_box.addButton("DECLINE", QMessageBox.RejectRole)
         message_box.exec_()
 
         clicked = message_box.clickedButton()
         if clicked is accept_button:
-            try:
-                snapshot = api.accept_trade_request(request["id"], self.current_user["id"])
-            except Exception:
-                return
-            self.pages["trading"].current_trade_id = snapshot.get("id")
-            self.pages["trading"].refresh_page()
+            worker = Worker(api.accept_trade_request, request["id"], self.current_user["id"])
+            # Use a safe callback that checks if GameWindow still exists
+            worker.signals.finished.connect(lambda snap: self.launch_trade_dialog(snap["id"]) if self.current_user else None)
+            QThreadPool.globalInstance().start(worker)
         elif clicked is decline_button:
-            try:
-                api.cancel_trade(request["id"], self.current_user["id"])
-            except Exception:
-                return
-            self.pages["trading"].refresh_page()
-        else:
-            self.pages["trading"].current_trade_id = request["id"]
+            worker = Worker(api.cancel_trade, request["id"], self.current_user["id"])
+            QThreadPool.globalInstance().start(worker)
 
     def _handle_battle_request_popup(self, request: dict) -> None:
-        message_box = QMessageBox(self)
-        message_box.setWindowTitle("Battle Request")
-        message_box.setText(f"{request['from_username']} challenged you to a PvP battle.")
-        open_button = message_box.addButton("Open Fighting Tab", QMessageBox.AcceptRole)
-        decline_button = message_box.addButton("Decline", QMessageBox.RejectRole)
-        later_button = message_box.addButton("Later", QMessageBox.ActionRole)
-        message_box.exec_()
-
-        clicked = message_box.clickedButton()
-        if clicked is decline_button:
-            try:
-                api.cancel_battle(request["id"], self.current_user["id"])
-            except Exception:
-                return
-            self.pages["fighting"].refresh_page()
-            return
-        self.pages["fighting"].current_battle_id = request["id"]
-        if clicked is open_button:
-            self.navigate("fighting")
+        # Use the new class to handle the dialog and its workers safely
+        dialog = BattleRequestDialog(self, request)
+        dialog.exec_()
 
 
 def main() -> None:

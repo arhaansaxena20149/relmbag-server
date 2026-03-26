@@ -67,10 +67,6 @@ def open_crate(user_id: int, rng: random.Random | None = None) -> dict:
     print(f"[DEBUG] Crate opened successfully for user: {username}")
     rarity = payload.get("rarity")
     creature_key = payload.get("creature")
-    level_provided = payload.get("level") is not None
-    xp_provided = payload.get("xp") is not None
-    value_roll_provided = payload.get("value_roll") is not None
-
     level = int(payload.get("level", 1) or 1)
     xp = int(payload.get("xp", 0) or 0)
     value_roll = float(payload.get("value_roll", 1.0) or 1.0)
@@ -80,7 +76,6 @@ def open_crate(user_id: int, rng: random.Random | None = None) -> dict:
     if not creature_key:
         # If `creature` isn't included, attempt to infer from rarity (best-effort).
         rarity = rarity or roll_rarity(generator)
-        # FIX: Defensive check for rarity in catalog
         available_templates = CREATURES_BY_RARITY.get(rarity)
         if not available_templates:
             print(f"[ERROR] No templates found for rarity '{rarity}'.")
@@ -95,59 +90,23 @@ def open_crate(user_id: int, rng: random.Random | None = None) -> dict:
     if candidate_key not in CREATURE_CATALOG:
         candidate_key = slugify(str(candidate_key))
     
-    # FIX: Defensive check for creature template
     template = CREATURE_CATALOG.get(candidate_key)
     if not template:
         print(f"[ERROR] Creature key '{candidate_key}' not found in catalog.")
-        raise CrateError("Failed to determine creature template.")
-
-    if not (level_provided and xp_provided and value_roll_provided):
-        try:
-            inv_resp = safe_request("get", f"inventory/{username}")
-            inv_payload = safe_json(inv_resp)
-            if isinstance(inv_payload, list) and candidate_key:
-                best_score: tuple[int, int] | None = None
-                best_match: dict | None = None
-                for item in inv_payload:
-                    if not isinstance(item, dict):
-                        continue
-                    item_key = item.get("creature") or item.get("creature_key")
-                    if not item_key:
-                        continue
-                    item_candidate = item_key if item_key in CREATURE_CATALOG else slugify(str(item_key))
-                    if item_candidate != candidate_key:
-                        continue
-                    item_rarity = item.get("rarity") or CREATURE_CATALOG[candidate_key].get("rarity")
-                    if rarity is not None and item_rarity != rarity:
-                        continue
-                    item_level = int(item.get("level", 0) or 0)
-                    item_xp = int(item.get("xp", 0) or 0)
-                    score = (item_level, item_xp)
-                    if best_score is None or score > best_score:
-                        best_score = score
-                        best_match = item
-                if isinstance(best_match, dict):
-                    level = int(best_match.get("level", level) or level)
-                    xp = int(best_match.get("xp", xp) or xp)
-                    value_roll = float(best_match.get("value_roll", value_roll) or value_roll)
-        except Exception as e:
-            print(f"[ERROR] Failed to fetch inventory during crate opening fallback: {e}")
-            pass
+        raise CrateError("Failed to load creature details.")
 
     creature_payload = {
         "id": int(generator.random() * 1_000_000_000),
         "user_id": user_id,
-        "creature_key": template["key"],
-        "creature_name": template["name"],
-        "rarity": rarity or template["rarity"],
-        "image_path": str(get_sprite_path(template["key"])),
+        "creature_key": template.get("key"),
+        "creature_name": template.get("name"),
+        "rarity": rarity,
+        "image_path": str(get_sprite_path(template.get("key"))),
         "level": level,
         "xp": xp,
         "value_roll": value_roll,
     }
-
     return {
         "creature": enrich_creature(creature_payload),
-        "remaining_tokens": int(remaining_tokens) if remaining_tokens is not None else 0,
-        "crate_cost": CRATE_COST,
+        "remaining_tokens": remaining_tokens,
     }

@@ -24,6 +24,7 @@ from PyQt5.QtWidgets import (
 import inventory
 import auth
 import database
+import api
 from config import ADMIN_PASSWORD, ADMIN_USERNAME, APP_ICON_PNG, APP_TITLE
 from ui_shared import APP_STYLESHEET, apply_fade_in, with_alpha
 from network import safe_request, safe_json
@@ -385,14 +386,12 @@ class AdminPanelPage(QWidget):
             set_status(self.status_label, "Player roster refreshed.", "#63D471")
 
     def kick_user(self, user_id: int) -> None:
-        import api
         worker = Worker(api.kick_user, user_id)
         worker.signals.finished.connect(lambda success: self.refresh_roster())
         QThreadPool.globalInstance().start(worker)
         set_status(self.status_label, f"Kicking user {user_id}...", "#F2C14E")
 
     def toggle_ban(self, user_id: int, should_ban: bool) -> None:
-        import api
         worker = Worker(api.ban_user, user_id, should_ban)
         worker.signals.finished.connect(lambda success: self.refresh_roster())
         QThreadPool.globalInstance().start(worker)
@@ -403,7 +402,6 @@ class AdminPanelPage(QWidget):
         from PyQt5.QtWidgets import QInputDialog, QLineEdit
         password, ok = QInputDialog.getText(self, "Reset Password", "Enter new password:", QLineEdit.Password)
         if ok and password:
-            import api
             worker = Worker(api.reset_password, user_id, password)
             worker.signals.finished.connect(lambda success: set_status(self.status_label, "Password reset successfully." if success else "Failed to reset password.", "#63D471" if success else "#E14B4B"))
             QThreadPool.globalInstance().start(worker)
@@ -443,7 +441,7 @@ class AdminPanelPage(QWidget):
             return
 
         user = {
-            "id": user_meta.get("username"),
+            "id": user_meta.get("id") or user_meta.get("username"),
             "username": user_meta.get("username"),
             "real_name": user_meta.get("real_name") or "",
             "email": user_meta.get("email") or "",
@@ -490,7 +488,6 @@ class AdminPanelPage(QWidget):
         self.adjust_tokens(self.current_user_id, delta)
 
     def adjust_tokens(self, user_id: int | str, delta: int) -> None:
-        import api
         worker = Worker(api.add_tokens, user_id, delta)
         worker.signals.finished.connect(lambda success: self.refresh_roster())
         QThreadPool.globalInstance().start(worker)

@@ -11,6 +11,7 @@ import database
 from database import transaction, _create_schema
 import trading
 import combat
+import auth
 
 # Configure logging
 logging.basicConfig(
@@ -30,6 +31,18 @@ DB_NAME = str(DATABASE_PATH)
 # --------------------------
 def get_db():
     return database.get_connection()
+
+def resolve_user(identifier):
+    """Resolve user by ID (int or numeric string) or Username."""
+    if not identifier:
+        return None
+    try:
+        if isinstance(identifier, int) or (isinstance(identifier, str) and identifier.isdigit()):
+            return database.get_user_by_id(int(identifier))
+        return database.get_user_by_username(str(identifier))
+    except Exception as e:
+        logger.error(f"Error resolving user '{identifier}': {e}")
+        return None
 
 def init_db():
     database.initialize_database()
@@ -265,16 +278,16 @@ def add_tokens():
 # --------------------------
 # INVENTORY
 # --------------------------
-@app.route("/inventory/<username>", methods=["GET"])
-def get_inventory(username):
+@app.route("/inventory/<identifier>", methods=["GET"])
+def get_inventory(identifier):
     try:
-        user = database.get_user_by_username(username)
+        user = resolve_user(identifier)
         if not user:
             return jsonify([]), 404
         items = database.list_creatures_for_user(user["id"])
         return jsonify(items)
     except Exception as e:
-        logger.error(f"Failed to fetch inventory: {e}")
+        logger.error(f"Failed to fetch inventory for '{identifier}': {e}")
         return jsonify([]), 500
 
 # --------------------------
@@ -283,22 +296,22 @@ def get_inventory(username):
 @app.route("/open_crate", methods=["POST"])
 def open_crate():
     data = request.json or {}
-    username = data.get("username")
+    identifier = data.get("username") or data.get("user_id")
 
-    if not username:
-        return jsonify({"status": "error", "message": "Username required"}), 400
+    if not identifier:
+        return jsonify({"status": "error", "message": "User identifier required"}), 400
 
     try:
-        user = database.get_user_by_username(username)
+        user = resolve_user(identifier)
         if not user or user["tokens"] < 10:
             return jsonify({"status": "error", "message": "Not enough tokens"}), 400
 
         database.adjust_user_tokens(user["id"], -10)
 
-        # Logic from crate_system.py could be used here if it was integrated
-        # For now, keep the simple logic but use database.py schema
+        # Use consistent drop logic
         rarity = roll_rarity()
-        creature_key = random.choice(CREATURES.get(rarity, ["Pebblit"])).lower().replace(" ", "_")
+        available_creatures = CREATURES.get(rarity, ["Pebblit"])
+        creature_key = random.choice(available_creatures).lower().replace(" ", "_")
         creature_name = creature_key.replace("_", " ").title()
 
         creature_id = database.insert_creature(
@@ -310,16 +323,18 @@ def open_crate():
             value_roll=random.uniform(0.7, 1.3)
         )
 
-        logger.info(f"Crate opened by {username}: {creature_name} ({rarity})")
+        logger.info(f"Crate opened by {user['username']} (ID: {user['id']}): {creature_name} ({rarity})")
         return jsonify({
             "status": "success",
             "id": creature_id,
             "rarity": rarity,
-            "creature": creature_name
+            "creature": creature_key,
+            "tokens": user["tokens"] - 10,
+            "remaining_tokens": user["tokens"] - 10
         })
     except Exception as e:
         logger.error(f"Crate opening failed: {e}")
-        return jsonify({"status": "error"}), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 # --------------------------
 # TRADING
@@ -328,13 +343,19 @@ def open_crate():
 def create_trade():
     data = request.json or {}
     initiator_id = data.get("initiator_id")
-    recipient_username = data.get("recipient_username")
+    recipient_identifier = data.get("recipient_username") or data.get("recipient_id")
 
-    if not all([initiator_id, recipient_username]):
+    if not all([initiator_id, recipient_identifier]):
         return jsonify({"status": "error", "message": "Missing required data"}), 400
 
     try:
-        snapshot = trading.create_trade(initiator_id, recipient_username)
+        initiator_id = int(initiator_id)
+        # Resolve recipient to username for trading.py compatibility if it expects username
+        recipient = resolve_user(recipient_identifier)
+        if not recipient:
+            return jsonify({"status": "error", "message": "Recipient not found"}), 404
+            
+        snapshot = trading.create_trade(initiator_id, recipient["username"])
         return jsonify(snapshot)
     except Exception as e:
         logger.error(f"Trade creation failed: {e}")
@@ -366,7 +387,7 @@ def accept_trade():
     user_id = data.get("user_id")
 
     try:
-        snapshot = trading.accept_trade_request(trade_id, user_id)
+        snapshot = trading.accept_trade_request(int(trade_id), int(user_id))
         return jsonify(snapshot)
     except Exception as e:
         logger.error(f"Trade acceptance failed: {e}")
@@ -377,8 +398,9 @@ def cancel_trade():
     data = request.json or {}
     trade_id = data.get("trade_id")
     user_id = data.get("user_id")
+
     try:
-        trading.cancel_trade_request(trade_id, user_id)
+        trading.cancel_trade_request(int(trade_id), int(user_id))
         return jsonify({"status": "success"})
     except Exception as e:
         logger.error(f"Trade cancellation failed: {e}")
@@ -391,7 +413,7 @@ def add_creature_to_trade():
     user_id = data.get("user_id")
     creature_id = data.get("creature_id")
     try:
-        snapshot = trading.add_creature_to_trade(trade_id, user_id, creature_id)
+        snapshot = trading.add_creature_to_trade(int(trade_id), int(user_id), int(creature_id))
         return jsonify(snapshot)
     except Exception as e:
         logger.error(f"Add creature to trade failed: {e}")
@@ -404,7 +426,7 @@ def remove_creature_from_trade():
     user_id = data.get("user_id")
     creature_id = data.get("creature_id")
     try:
-        snapshot = trading.remove_creature_from_trade(trade_id, user_id, creature_id)
+        snapshot = trading.remove_creature_from_trade(int(trade_id), int(user_id), int(creature_id))
         return jsonify(snapshot)
     except Exception as e:
         logger.error(f"Remove creature from trade failed: {e}")
@@ -417,7 +439,7 @@ def set_trade_tokens():
     user_id = data.get("user_id")
     token_amount = data.get("token_amount")
     try:
-        snapshot = trading.set_trade_tokens(trade_id, user_id, token_amount)
+        snapshot = trading.set_trade_tokens(int(trade_id), int(user_id), int(token_amount))
         return jsonify(snapshot)
     except Exception as e:
         logger.error(f"Set trade tokens failed: {e}")
@@ -429,7 +451,7 @@ def confirm_trade():
     trade_id = data.get("trade_id")
     user_id = data.get("user_id")
     try:
-        snapshot = trading.confirm_trade(trade_id, user_id)
+        snapshot = trading.confirm_trade(int(trade_id), int(user_id))
         return jsonify(snapshot)
     except Exception as e:
         logger.error(f"Confirm trade failed: {e}")
@@ -451,11 +473,20 @@ def list_incoming_trade_requests(user_id):
 def create_battle():
     data = request.json or {}
     challenger_id = data.get("challenger_id")
-    opponent_username = data.get("opponent_username")
+    opponent_identifier = data.get("opponent_username") or data.get("opponent_id")
     creature_id = data.get("creature_id")
 
+    if not all([challenger_id, opponent_identifier, creature_id]):
+        return jsonify({"status": "error", "message": "Missing required data"}), 400
+
     try:
-        snapshot = combat.create_battle(challenger_id, opponent_username, creature_id)
+        challenger_id = int(challenger_id)
+        creature_id = int(creature_id)
+        opponent = resolve_user(opponent_identifier)
+        if not opponent:
+            return jsonify({"status": "error", "message": "Opponent not found"}), 404
+            
+        snapshot = combat.create_battle(challenger_id, opponent["username"], creature_id)
         return jsonify(snapshot)
     except Exception as e:
         logger.error(f"Battle creation failed: {e}")
@@ -488,7 +519,7 @@ def accept_battle():
     creature_id = data.get("creature_id")
 
     try:
-        snapshot = combat.accept_battle(battle_id, user_id, creature_id)
+        snapshot = combat.accept_battle(int(battle_id), int(user_id), int(creature_id))
         return jsonify(snapshot)
     except Exception as e:
         logger.error(f"Battle acceptance failed: {e}")
@@ -500,7 +531,7 @@ def cancel_battle():
     battle_id = data.get("battle_id")
     user_id = data.get("user_id")
     try:
-        combat.cancel_battle(battle_id, user_id)
+        combat.cancel_battle(int(battle_id), int(user_id))
         return jsonify({"status": "success"})
     except Exception as e:
         logger.error(f"Battle cancellation failed: {e}")
@@ -520,12 +551,12 @@ def submit_move():
     data = request.json or {}
     battle_id = data.get("battle_id")
     user_id = data.get("user_id")
-    move = data.get("move")
+    move_name = data.get("move_name")
     try:
-        snapshot = combat.submit_move(battle_id, user_id, move)
+        snapshot = combat.submit_move(int(battle_id), int(user_id), move_name)
         return jsonify(snapshot)
     except Exception as e:
-        logger.error(f"Submit move failed: {e}")
+        logger.error(f"Move submission failed: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/forfeit_battle", methods=["POST"])
@@ -534,10 +565,10 @@ def forfeit_battle():
     battle_id = data.get("battle_id")
     user_id = data.get("user_id")
     try:
-        snapshot = combat.forfeit_battle(battle_id, user_id)
+        snapshot = combat.forfeit_battle(int(battle_id), int(user_id))
         return jsonify(snapshot)
     except Exception as e:
-        logger.error(f"Forfeit battle failed: {e}")
+        logger.error(f"Battle forfeit failed: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/heartbeat", methods=["POST"])

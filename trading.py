@@ -9,7 +9,8 @@ class TradeError(ValueError):
 
 
 def _load_trade(connection, trade_id: int):
-    return connection.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchone()
+    row = connection.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchone()
+    return dict(row) if row else None
 
 
 def _participant_side(trade, user_id: int) -> tuple[str, str, int]:
@@ -106,17 +107,20 @@ def _trade_snapshot(connection, trade_id: int, viewer_id: int | None = None) -> 
     initiator_id = trade_row.get("initiator_id")
     recipient_id = trade_row.get("recipient_id")
 
-    initiator = connection.execute(
+    initiator_row = connection.execute(
         "SELECT id, username FROM users WHERE id = ?",
         (initiator_id,),
     ).fetchone()
-    recipient = connection.execute(
+    recipient_row = connection.execute(
         "SELECT id, username FROM users WHERE id = ?",
         (recipient_id,),
     ).fetchone()
     
-    if initiator is None or recipient is None:
+    if initiator_row is None or recipient_row is None:
         raise TradeError("Trade participants not found.")
+    
+    initiator = dict(initiator_row)
+    recipient = dict(recipient_row)
 
     offered = connection.execute(
         """
@@ -250,7 +254,7 @@ def create_trade(initiator_id: int, recipient_username: str) -> dict:
         raise TradeError("You cannot trade with yourself.")
 
     with database.transaction() as connection:
-        existing = connection.execute(
+        existing_row = connection.execute(
             """
             SELECT id
             FROM trades
@@ -265,8 +269,8 @@ def create_trade(initiator_id: int, recipient_username: str) -> dict:
             (initiator_id, recipient.get("id"), recipient.get("id"), initiator_id),
         ).fetchone()
 
-        if existing is not None:
-            trade_id = existing.get("id")
+        if existing_row is not None:
+            trade_id = existing_row["id"]
         else:
             cursor = connection.execute(
                 """
@@ -319,6 +323,30 @@ def decline_trade_request(trade_id: int, user_id: int) -> None:
         )
 
 
+def cancel_trade_request(trade_id: int, user_id: int) -> None:
+    with database.transaction() as connection:
+        trade = _load_trade(connection, trade_id)
+        if trade is None:
+            raise TradeError("Trade not found.")
+        
+        # Any participant can cancel if it's pending or open
+        if trade.get("status") not in ("pending", "open"):
+            raise TradeError("This trade is no longer active.")
+            
+        if trade.get("initiator_id") != user_id and trade.get("recipient_id") != user_id:
+            raise TradeError("You are not part of this trade.")
+            
+        connection.execute(
+            """
+            UPDATE trades
+            SET status = 'cancelled',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (trade_id,),
+        )
+
+
 def set_trade_tokens(trade_id: int, user_id: int, token_amount: int) -> dict:
     if token_amount < 0:
         raise TradeError("Token offers cannot be negative.")
@@ -327,9 +355,10 @@ def set_trade_tokens(trade_id: int, user_id: int, token_amount: int) -> dict:
         trade = _load_trade(connection, trade_id)
         _assert_trade_open(trade)
         token_column, _confirm_column, _other_user_id = _participant_side(trade, user_id)
-        user = connection.execute("SELECT tokens FROM users WHERE id = ?", (user_id,)).fetchone()
-        if user is None:
+        user_row = connection.execute("SELECT tokens FROM users WHERE id = ?", (user_id,)).fetchone()
+        if user_row is None:
             raise TradeError("User not found.")
+        user = dict(user_row)
         if token_amount > user.get("tokens", 0):
             raise TradeError("You do not have that many tokens.")
 
@@ -347,11 +376,14 @@ def add_creature_to_trade(trade_id: int, user_id: int, creature_id: int) -> dict
         _assert_trade_open(trade)
         _participant_side(trade, user_id)
 
-        creature = connection.execute("SELECT * FROM owned_creatures WHERE id = ?", (creature_id,)).fetchone()
-        if creature is None or creature["user_id"] != user_id:
+        creature_row = connection.execute("SELECT * FROM owned_creatures WHERE id = ?", (creature_id,)).fetchone()
+        if creature_row is None:
+            raise TradeError("Creature not found.")
+        creature = dict(creature_row)
+        if creature.get("user_id") != user_id:
             raise TradeError("You do not own that creature.")
 
-        in_open_trade = connection.execute(
+        in_open_trade_row = connection.execute(
             """
             SELECT tc.id
             FROM trade_creatures tc
@@ -363,7 +395,7 @@ def add_creature_to_trade(trade_id: int, user_id: int, creature_id: int) -> dict
             """,
             (creature_id, trade_id),
         ).fetchone()
-        if in_open_trade is not None:
+        if in_open_trade_row is not None:
             raise TradeError("That creature is already locked in another open trade.")
 
         in_open_battle = connection.execute(
