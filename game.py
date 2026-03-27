@@ -33,7 +33,7 @@ import crate_system
 import database
 import inventory
 import api
-from config import APP_ICON_PNG, APP_SUBTITLE, APP_TITLE, BASE_VALUES, CRATE_COST, DROP_RATES, RARITY_COLORS, RARITY_ORDER
+from config import APP_ICON_PNG, APP_SUBTITLE, APP_TITLE, BASE_VALUES, CRATE_COST, DROP_RATES, RARITY_COLORS, RARITY_ORDER, CREATURES_BY_RARITY
 from ui_shared import APP_STYLESHEET, apply_fade_in, load_pixmap, with_alpha
 from workers import Worker, HeartbeatWorker
 from api import get_users
@@ -210,27 +210,52 @@ class RarityInfoCard(QFrame):
     def __init__(self, rarity: str) -> None:
         super().__init__()
         self.setObjectName("rarityCard")
+        self.rarity = rarity
         color = RARITY_COLORS[rarity]
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(8)
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(14, 14, 14, 14)
+        self.layout.setSpacing(8)
 
+        title_row = QHBoxLayout()
         title = QLabel(rarity)
         title.setStyleSheet(f"font-size: 16px; font-weight: 800; color: {color};")
+        title_row.addWidget(title)
+        title_row.addStretch()
+        self.arrow = QLabel("▼")
+        self.arrow.setStyleSheet(f"color: {color}; font-weight: 800;")
+        title_row.addWidget(self.arrow)
+        self.layout.addLayout(title_row)
+
         chance = QLabel(f"{DROP_RATES[rarity]}% drop rate")
         chance.setStyleSheet("font-weight: 700;")
         value = QLabel(f"Base value: {BASE_VALUES[rarity]}")
         value.setObjectName("mutedText")
+        
+        self.layout.addWidget(chance)
+        self.layout.addWidget(value)
+
+        self.creature_list = QLabel()
+        self.creature_list.setWordWrap(True)
+        self.creature_list.setStyleSheet(f"color: {with_alpha(color, 200)}; font-size: 12px; margin-top: 5px;")
+        names = [c["name"] for c in CREATURES_BY_RARITY.get(rarity, [])]
+        self.creature_list.setText("• " + "\n• ".join(names))
+        self.creature_list.setVisible(False)
+        self.layout.addWidget(self.creature_list)
+
         bar = QFrame()
         bar.setFixedHeight(8)
         bar.setStyleSheet(
             f"background: {with_alpha(color, 170)}; border-radius: 4px; border: 1px solid {with_alpha(color, 220)};"
         )
+        self.layout.addWidget(bar)
+        
+        self.setCursor(Qt.PointingHandCursor)
 
-        layout.addWidget(title)
-        layout.addWidget(chance)
-        layout.addWidget(value)
-        layout.addWidget(bar)
+    def mousePressEvent(self, event) -> None:
+        is_visible = self.creature_list.isVisible()
+        self.creature_list.setVisible(not is_visible)
+        self.arrow.setText("▲" if not is_visible else "▼")
+        super().mousePressEvent(event)
 
 
 class AuthPage(QWidget):
@@ -512,11 +537,26 @@ class CratePage(BasePage):
 
         self.open_button = QPushButton("Open Crate")
         self.open_button.clicked.connect(self.open_crate)
+        
+        self.consecutive_button = QPushButton("Consecutive Open")
+        self.consecutive_button.setObjectName("secondaryButton")
+        self.consecutive_button.clicked.connect(self.show_consecutive_dialog)
+        
+        self.auto_sell_combo = QComboBox()
+        self.auto_sell_combo.addItems(["Auto Sell: None"] + [f"Auto Sell: {r}" for r in RARITY_ORDER[:5]]) # Up to Legendary
+        self.auto_sell_combo.setFixedWidth(200)
+        
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(self.open_button)
+        btn_row.addWidget(self.consecutive_button)
+        btn_row.addWidget(self.auto_sell_combo)
+        btn_row.addStretch()
+        
         hero_layout.addWidget(title)
         hero_layout.addWidget(subtitle)
         hero_layout.addLayout(badge_row)
         hero_layout.addWidget(self.feedback_label)
-        hero_layout.addWidget(self.open_button, alignment=Qt.AlignLeft)
+        hero_layout.addLayout(btn_row)
         layout.addWidget(hero_panel)
 
         body = QHBoxLayout()
@@ -595,22 +635,108 @@ class CratePage(BasePage):
             return
         self.roll_ticks = 0
         self.open_button.setEnabled(False)
+        self.consecutive_button.setEnabled(False)
         status_message(self.feedback_label, "Crate spinning up...", "#F2C14E")
-        self.roll_timer.start(120)
+        self.roll_timer.start(80)
 
     def _advance_roll_animation(self) -> None:
-        stages = [
-            "Scanning token balance...",
-            "Rolling rarity table...",
-            "Selecting creature...",
-            "Locking reward...",
-        ]
         self.roll_ticks += 1
-        status_message(self.feedback_label, stages[self.roll_ticks % len(stages)], "#F2C14E")
-        if self.roll_ticks >= 7:
+        
+        # Shuffle through random creatures
+        all_creatures = []
+        for rarity_list in CREATURES_BY_RARITY.values():
+            all_creatures.extend(rarity_list)
+        
+        random_creature = random.choice(all_creatures)
+        self.result_image.setPixmap(load_pixmap("", 180)) # Clear while shuffling or show blurred?
+        self.result_name.setText(random_creature["name"])
+        self.result_name.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {RARITY_COLORS[random_creature['rarity']]};")
+        self.result_rarity.setText(random_creature["rarity"])
+        self.result_rarity.setStyleSheet(rarity_badge_stylesheet(RARITY_COLORS[random_creature['rarity']]))
+
+        if self.roll_ticks >= 15:
             self.roll_timer.stop()
             self.open_button.setEnabled(True)
+            self.consecutive_button.setEnabled(True)
             self._finish_roll()
+
+    def show_consecutive_dialog(self) -> None:
+        from PyQt5.QtWidgets import QInputDialog
+        user = self.game_window.current_user
+        if not user: return
+        
+        max_possible = user["tokens"] // CRATE_COST
+        if max_possible <= 0:
+            show_error(self, "Not enough tokens for even one crate!")
+            return
+            
+        count, ok = QInputDialog.getInt(self, "Consecutive Open", "How many crates to open?", 1, 1, min(max_possible, 100), 1)
+        if ok:
+            self._run_consecutive_open(count)
+
+    def _run_consecutive_open(self, count: int) -> None:
+        user = self.game_window.current_user
+        if not user: return
+        
+        status_message(self.feedback_label, f"Opening {count} crates...", "#F2C14E")
+        self.open_button.setEnabled(False)
+        self.consecutive_button.setEnabled(False)
+        
+        auto_sell_idx = self.auto_sell_combo.currentIndex()
+        auto_sell_rarity = None
+        if auto_sell_idx > 0:
+            auto_sell_rarity = RARITY_ORDER[auto_sell_idx - 1]
+
+        def _bulk_open(username: str, n: int, sell_rarity: str | None):
+            results = []
+            for _ in range(n):
+                res = crate_system.open_crate(username)
+                if sell_rarity and res.get("creature", {}).get("rarity") == sell_rarity:
+                    # Auto-sell logic
+                    creature_id = res["creature"]["id"]
+                    sell_res = api.safe_request("post", "sell_creature", json={"user_id": username, "creature_id": creature_id})
+                    res["auto_sold"] = True
+                results.append(res)
+            return results
+
+        worker = Worker(_bulk_open, user.get("username"), count, auto_sell_rarity)
+        worker.signals.finished.connect(self._on_bulk_opened)
+        worker.signals.error.connect(lambda e: self._on_bulk_error(str(e)))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_bulk_opened(self, results: list) -> None:
+        self.open_button.setEnabled(True)
+        self.consecutive_button.setEnabled(True)
+        self.game_window.refresh_session()
+        
+        if not results: return
+        
+        # Show summary of bulk open
+        last_res = results[-1]
+        self._on_crate_opened(last_res)
+        
+        rarity_counts = {}
+        total_tokens_back = 0
+        sold_count = 0
+        for r in results:
+            rarity = r.get("creature", {}).get("rarity", "Unknown")
+            rarity_counts[rarity] = rarity_counts.get(rarity, 0) + 1
+            if r.get("auto_sold"):
+                sold_count += 1
+        
+        summary = ", ".join([f"{count} {rarity}" for rarity, count in rarity_counts.items()])
+        msg = f"Opened {len(results)} crates: {summary}."
+        if sold_count > 0:
+            msg += f" (Auto-sold {sold_count} creatures)"
+            
+        status_message(self.feedback_label, msg, "#63D471")
+        
+        self.game_window.pages["inventory"].refresh_page()
+
+    def _on_bulk_error(self, err: str) -> None:
+        self.open_button.setEnabled(True)
+        self.consecutive_button.setEnabled(True)
+        status_message(self.feedback_label, err, "#F47C7C")
 
     def _finish_roll(self) -> None:
         user = self.game_window.current_user
@@ -777,6 +903,14 @@ class InventoryPage(BasePage):
         detail_layout.addWidget(self.detail_moves)
         
         detail_layout.addStretch()
+        
+        self.sell_button = QPushButton("Sell for 50% Value")
+        self.sell_button.setObjectName("secondaryButton")
+        self.sell_button.setStyleSheet("background: #E14B4B; color: white; font-weight: 800; padding: 10px;")
+        self.sell_button.clicked.connect(self.sell_selected_creature)
+        self.sell_button.setVisible(False)
+        detail_layout.addWidget(self.sell_button)
+        
         detail_layout.addWidget(self.detail_value)
 
         root.addWidget(self.detail_panel, 2)
@@ -844,8 +978,10 @@ class InventoryPage(BasePage):
         self.selected_creature_id = creature_id
         creature = self.current_creatures.get(creature_id)
         if creature is None:
+            self.sell_button.setVisible(False)
             return
 
+        self.sell_button.setVisible(True)
         for card_id, card in self.current_cards.items():
             card.set_selected(card_id == creature_id)
 
@@ -868,6 +1004,30 @@ class InventoryPage(BasePage):
         self.detail_moves.setText(moves_text)
         
         self.detail_value.setText(f"VALUE: {creature['value']} TOKENS")
+
+    def sell_selected_creature(self) -> None:
+        creature = self.current_creatures.get(self.selected_creature_id)
+        if not creature: return
+        
+        refund = creature["value"] // 2
+        reply = QMessageBox.question(
+            self, "Sell Creature",
+            f"Are you sure you want to sell {creature['display_name']} for {refund} tokens?\n(50% of its trade value)",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            worker = Worker(api.safe_request, "post", "sell_creature", json={
+                "user_id": self.game_window.current_user.get("username"),
+                "creature_id": self.selected_creature_id
+            })
+            worker.signals.finished.connect(self._on_sold)
+            QThreadPool.globalInstance().start(worker)
+
+    def _on_sold(self, res) -> None:
+        self.game_window.refresh_session()
+        self.refresh_page()
+        status_message(self.inventory_summary, "Creature sold successfully.", "#63D471")
 
 
 class TradingLobby(BasePage):

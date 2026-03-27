@@ -324,16 +324,57 @@ def open_crate():
         )
 
         logger.info(f"Crate opened by {user['username']} (ID: {user['id']}): {creature_name} ({rarity})")
+        
+        # FIX: Standardize response for client
         return jsonify({
             "status": "success",
-            "id": creature_id,
-            "rarity": rarity,
-            "creature": creature_key,
-            "tokens": user["tokens"] - 10,
-            "remaining_tokens": user["tokens"] - 10
+            "creature": {
+                "id": creature_id,
+                "display_name": creature_name,
+                "rarity": rarity,
+                "image_path": f"assets/generated/sprites/{creature_key}.png",
+                "rarity_color": RARITY_COLORS.get(rarity, "#FFFFFF"),
+                "level": 1,
+                "value": BASE_VALUES.get(rarity, 10) # Simple fallback for value
+            },
+            "remaining_tokens": user["tokens"] - 10,
+            "crate_cost": 10
         })
     except Exception as e:
         logger.error(f"Crate opening failed: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/sell_creature", methods=["POST"])
+def sell_creature():
+    data = request.json or {}
+    identifier = data.get("user_id")
+    creature_id = data.get("creature_id")
+
+    if not identifier or not creature_id:
+        return jsonify({"status": "error", "message": "Missing required data"}), 400
+
+    try:
+        user = resolve_user(identifier)
+        if not user:
+            return jsonify({"status": "error", "message": "User not found"}), 404
+
+        creature = database.get_creature_by_id(int(creature_id))
+        if not creature or creature["user_id"] != user["id"]:
+            return jsonify({"status": "error", "message": "Creature not found or not owned"}), 404
+
+        # Calculate refund (50% of value)
+        from leveling import calculate_creature_value
+        value = calculate_creature_value(creature["rarity"], creature["level"], creature["value_roll"])
+        refund = int(value // 2)
+
+        # Remove creature and add tokens
+        database.delete_creature(creature["id"])
+        database.adjust_user_tokens(user["id"], refund)
+
+        logger.info(f"User {user['username']} sold creature {creature['creature_name']} for {refund} tokens")
+        return jsonify({"status": "success", "refund": refund})
+    except Exception as e:
+        logger.error(f"Sell creature failed: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 # --------------------------

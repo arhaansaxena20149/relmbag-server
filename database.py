@@ -462,6 +462,11 @@ def transfer_creature(creature_id: int, new_owner_id: int) -> None:
         )
 
 
+def delete_creature(creature_id: int) -> None:
+    with transaction() as connection:
+        connection.execute("DELETE FROM owned_creatures WHERE id = ?", (creature_id,))
+
+
 def seed_demo_data() -> None:
     from auth import hash_password
     from config import CREATURE_CATALOG
