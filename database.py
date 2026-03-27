@@ -77,6 +77,23 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         # We use a constant string and update it in a separate step.
         connection.execute("ALTER TABLE users ADD COLUMN last_seen TEXT NOT NULL DEFAULT '2024-01-01 00:00:00'")
         connection.execute("UPDATE users SET last_seen = CURRENT_TIMESTAMP")
+    
+    if "daily_streak" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN daily_streak INTEGER NOT NULL DEFAULT 0")
+    if "last_daily_claim" not in user_columns:
+        connection.execute("ALTER TABLE users ADD COLUMN last_daily_claim TEXT")
+
+    # Create chat_messages table
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
 
     # Migration for trades table
     has_trades = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades'").fetchone() is not None

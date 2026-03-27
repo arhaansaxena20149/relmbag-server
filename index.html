@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset='utf-8'>
+  <meta name="viewport" content="width=device-width, initial-scale=1" id="relmbagDesktopViewport" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="generator" content="RelmBag.com"/>
+
+  <link rel="icon" sizes="192x192" href="assets/icons/pebblit.png" type="image/png"/>
+  <link rel="shortcut icon" href="assets/icons/pebblit.png" type="image/png"/>
+  <link rel="apple-touch-icon" href="assets/icons/pebblit.png" type="image/png"/>
+
+  <title>RelmBag Arena | The Ultimate Creature Duel</title>
+  
+  <script>
+    // Force remove Wix elements after load and handle redirects
+    window.addEventListener('load', function() {
+      const wixSelectors = [
+        '#WIX_ADS', '.wix-ads', '#WIX_WATERMARK', 
+        '[class*="FreemiumBanner"]', '[id*="FreemiumBanner"]',
+        '[data-testid="wix-ads"]'
+      ];
+      
+      const removeWix = () => {
+        wixSelectors.forEach(selector => {
+          document.querySelectorAll(selector).forEach(el => el.remove());
+        });
+        
+        document.querySelectorAll('a').forEach(link => {
+          if (link.href && (link.href.includes('wix.com') || link.href.includes('wixsite.com'))) {
+            link.href = 'https://relmbag.com';
+          }
+        });
+      };
+
+      removeWix();
+      setInterval(removeWix, 1000);
+    });
+  </script>
+
+  <style>
+    #WIX_ADS, [id^="WIX_ADS"], .wix-ads, #WIX_WATERMARK,
+    [class*="FreemiumBanner"], [id*="FreemiumBanner"], [data-testid="wix-ads"] {
+      display: none !important;
+      visibility: hidden !important;
+      height: 0 !important;
+      width: 0 !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    
+    body {
+      padding-top: 0 !important;
+      margin-top: 0 !important;
+      background-color: #2D1F16;
+      color: #F4E4BC;
+      font-family: 'Palatino', serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      text-align: center;
+    }
+
+    .container {
+      max-width: 800px;
+      padding: 40px;
+      border: 2px solid #C19A6B;
+      border-radius: 20px;
+      background: #3D2B1F;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+
+    h1 { color: #F2C14E; font-size: 3em; margin-bottom: 10px; }
+    p { font-size: 1.2em; line-height: 1.6; }
+    
+    .btn {
+      display: inline-block;
+      margin-top: 20px;
+      padding: 15px 30px;
+      background: #8B5E3C;
+      color: #F4E4BC;
+      text-decoration: none;
+      border-radius: 10px;
+      font-weight: bold;
+      transition: background 0.3s;
+    }
+    .btn:hover { background: #A67B5B; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <img src="assets/icons/pebblit.png" alt="RelmBag Logo" style="width: 120px; margin-bottom: 20px;">
+    <h1>RelmBag Arena</h1>
+    <p>Challenge rivals to tactical creature duels, trade rare beasts, and climb the global leaderboards in the ultimate arena experience.</p>
+    <a href="https://relmbag.com" class="btn">Play Now</a>
+  </div>
+</body>
+</html>

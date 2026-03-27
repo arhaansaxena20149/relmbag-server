@@ -12,6 +12,12 @@ The system includes:
 - inventory sorting and rarity filtering
 - online-player trading with request notifications plus accept and decline flow
 - player-to-player Pokemon-style combat with battle requests, one-creature selection, simultaneous move locking, and XP rewards
+- **Daily Rewards**: Progressive token rewards for a 7-day login streak (up to 200 tokens)
+- **Global Leaderboard**: Track the top players by tokens and creature collection size
+- **Global Chat**: Real-time server-connected chat for all players
+- **Player Search**: Search for any user by username/email to see their stats and collection
+- **Improved Crate Opening**: Shuffling animations, consecutive openings, and auto-sell features
+- **Creature Selling**: Sell unwanted creatures in your inventory for 50% of their token value
 - a private admin panel for token control and user lookup
 - sprite-sheet slicing with a generated demo sheet fallback
 

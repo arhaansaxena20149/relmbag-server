@@ -6,14 +6,15 @@ import random
 import time
 import os
 import uuid
-from config import DATABASE_PATH
+from config import DATABASE_PATH, DAILY_REWARDS
 import database
 from database import transaction, _create_schema
 import trading
 import combat
 import auth
+from datetime import datetime, timedelta
 
-# Configure logging
+# ...Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -611,6 +612,136 @@ def forfeit_battle():
     except Exception as e:
         logger.error(f"Battle forfeit failed: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/claim_daily", methods=["POST"])
+def claim_daily():
+    data = request.json or {}
+    user_id = data.get("user_id")
+    if not user_id: return jsonify({"status": "error"}), 400
+    
+    try:
+        user = database.get_user_by_id(user_id)
+        if not user: return jsonify({"status": "error"}), 404
+        
+        now = datetime.utcnow()
+        last_claim_str = user.get("last_daily_claim")
+        streak = user.get("daily_streak", 0)
+        
+        can_claim = False
+        if not last_claim_str:
+            can_claim = True
+            streak = 1
+        else:
+            last_claim = datetime.fromisoformat(last_claim_str)
+            diff = now - last_claim
+            
+            if diff.days >= 2: # Streak broken
+                can_claim = True
+                streak = 1
+            elif diff.days >= 1: # Next day
+                can_claim = True
+                streak = (streak % 7) + 1
+            else:
+                return jsonify({"status": "error", "message": "Already claimed today"}), 400
+        
+        if can_claim:
+            tokens = DAILY_REWARDS[streak - 1]
+            database.adjust_user_tokens(user["id"], tokens)
+            with transaction() as conn:
+                conn.execute("UPDATE users SET daily_streak = ?, last_daily_claim = ? WHERE id = ?", (streak, now.isoformat(), user["id"]))
+            
+            return jsonify({
+                "status": "success",
+                "tokens_earned": tokens,
+                "new_streak": streak,
+                "next_reward": DAILY_REWARDS[streak % 7] if streak < 7 else DAILY_REWARDS[0]
+            })
+            
+    except Exception as e:
+        logger.error(f"Daily claim failed: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route("/leaderboard", methods=["GET"])
+def get_leaderboard():
+    try:
+        # Top Tokens
+        top_tokens = database.fetch_all(
+            "SELECT username, tokens FROM users WHERE is_banned = 0 ORDER BY tokens DESC LIMIT 10"
+        )
+        
+        # Top Creatures (count)
+        top_creatures = database.fetch_all(
+            """
+            SELECT u.username, COUNT(oc.id) as creature_count 
+            FROM users u
+            LEFT JOIN owned_creatures oc ON u.id = oc.user_id
+            WHERE u.is_banned = 0
+            GROUP BY u.id
+            ORDER BY creature_count DESC
+            LIMIT 10
+            """
+        )
+        
+        return jsonify({
+            "top_tokens": [dict(r) for r in top_tokens],
+            "top_creatures": [dict(r) for r in top_creatures]
+        })
+    except Exception as e:
+        logger.error(f"Leaderboard fetch failed: {e}")
+        return jsonify({"status": "error"}), 500
+
+@app.route("/player_stats/<identifier>", methods=["GET"])
+def get_player_stats(identifier):
+    try:
+        user = resolve_user(identifier)
+        if not user: return jsonify({"status": "error", "message": "Player not found"}), 404
+        
+        # Get creatures
+        creatures = database.fetch_all(
+            "SELECT * FROM owned_creatures WHERE user_id = ? ORDER BY rarity DESC", (user["id"],)
+        )
+        
+        return jsonify({
+            "username": user["username"],
+            "tokens": user["tokens"],
+            "creature_count": len(creatures),
+            "creatures": [dict(c) for c in creatures],
+            "last_seen": user["last_seen"]
+        })
+    except Exception as e:
+        logger.error(f"Player stats fetch failed: {e}")
+        return jsonify({"status": "error"}), 500
+
+@app.route("/chat", methods=["GET", "POST"])
+def chat():
+    if request.method == "POST":
+        data = request.json or {}
+        user_id = data.get("user_id")
+        message = data.get("message")
+        if not user_id or not message: return jsonify({"status": "error"}), 400
+        
+        try:
+            with transaction() as conn:
+                conn.execute("INSERT INTO chat_messages (user_id, message) VALUES (?, ?)", (user_id, message))
+            return jsonify({"status": "success"})
+        except Exception as e:
+            logger.error(f"Chat send failed: {e}")
+            return jsonify({"status": "error"}), 500
+    else:
+        try:
+            messages = database.fetch_all(
+                """
+                SELECT cm.*, u.username 
+                FROM chat_messages cm
+                JOIN users u ON cm.user_id = u.id
+                ORDER BY cm.created_at DESC
+                LIMIT 50
+                """
+            )
+            return jsonify([dict(m) for m in messages])
+        except Exception as e:
+            logger.error(f"Chat fetch failed: {e}")
+            return jsonify([]), 500
 
 @app.route("/heartbeat", methods=["POST"])
 def heartbeat():

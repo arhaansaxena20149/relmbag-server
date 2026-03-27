@@ -556,6 +556,25 @@ class CratePage(BasePage):
         hero_layout.addWidget(subtitle)
         hero_layout.addLayout(badge_row)
         hero_layout.addWidget(self.feedback_label)
+        
+        # Daily Reward Section
+        self.daily_reward_panel = QFrame()
+        self.daily_reward_panel.setObjectName("accentPanel")
+        self.daily_reward_panel.setStyleSheet("background: #F4E4BC; border: 1px solid #C19A6B; border-radius: 10px;")
+        daily_layout = QHBoxLayout(self.daily_reward_panel)
+        daily_layout.setContentsMargins(15, 10, 15, 10)
+        
+        self.daily_status_label = QLabel("Daily Reward: Available!")
+        self.daily_status_label.setStyleSheet("font-weight: 800; color: #2D1F16;")
+        self.claim_daily_btn = QPushButton("Claim Daily")
+        self.claim_daily_btn.setObjectName("secondaryButton")
+        self.claim_daily_btn.clicked.connect(self.claim_daily_reward)
+        
+        daily_layout.addWidget(self.daily_status_label)
+        daily_layout.addStretch()
+        daily_layout.addWidget(self.claim_daily_btn)
+        
+        hero_layout.addWidget(self.daily_reward_panel)
         hero_layout.addLayout(btn_row)
         layout.addWidget(hero_panel)
 
@@ -625,6 +644,32 @@ class CratePage(BasePage):
             self.token_label.setText(f"Balance: {user['tokens']} tokens")
         if not self.feedback_label.text():
             status_message(self.feedback_label, "Browse the odds or spend tokens to summon.", "#AEBBD0")
+
+    def claim_daily_reward(self) -> None:
+        user = self.game_window.current_user
+        if not user: return
+        
+        self.claim_daily_btn.setEnabled(False)
+        worker = Worker(api.safe_request, "post", "claim_daily", json={"user_id": user.get("id")})
+        worker.signals.finished.connect(self._on_daily_claimed)
+        worker.signals.error.connect(lambda e: self._on_daily_error(str(e)))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_daily_claimed(self, res) -> None:
+        if isinstance(res, dict) and res.get("status") == "success":
+            earned = res.get("tokens_earned", 0)
+            streak = res.get("new_streak", 1)
+            self.daily_status_label.setText(f"Claimed {earned} tokens! Day {streak} Streak.")
+            self.daily_status_label.setStyleSheet("font-weight: 800; color: #63D471;")
+            self.game_window.refresh_session()
+        else:
+            msg = res.get("message", "Error claiming reward") if isinstance(res, dict) else "Error"
+            self.daily_status_label.setText(msg)
+            self.daily_status_label.setStyleSheet("font-weight: 800; color: #F47C7C;")
+
+    def _on_daily_error(self, err: str) -> None:
+        self.daily_status_label.setText("Already claimed today!")
+        self.daily_status_label.setStyleSheet("font-weight: 800; color: #F47C7C;")
 
     def open_crate(self) -> None:
         user = self.game_window.current_user
@@ -2003,6 +2048,180 @@ class ProfilePage(BasePage):
             pass
 
 
+class LeaderboardPage(BasePage):
+    def __init__(self, game_window: "GameWindow") -> None:
+        super().__init__(game_window)
+        layout = QVBoxLayout(self)
+        
+        title = QLabel("Global Leaderboards")
+        title.setObjectName("title")
+        layout.addWidget(title)
+        
+        body = QHBoxLayout()
+        
+        # Tokens Leaderboard
+        tokens_panel = QFrame()
+        tokens_panel.setObjectName("panel")
+        tokens_layout = QVBoxLayout(tokens_panel)
+        tokens_layout.addWidget(QLabel("<b>TOP TOKENS</b>"))
+        self.tokens_list = QListWidget()
+        tokens_layout.addWidget(self.tokens_list)
+        body.addWidget(tokens_panel)
+        
+        # Creatures Leaderboard
+        creatures_panel = QFrame()
+        creatures_panel.setObjectName("panel")
+        creatures_layout = QVBoxLayout(creatures_panel)
+        creatures_layout.addWidget(QLabel("<b>TOP CREATURE COUNTS</b>"))
+        self.creatures_list = QListWidget()
+        creatures_layout.addWidget(self.creatures_list)
+        body.addWidget(creatures_panel)
+        
+        layout.addLayout(body)
+        
+        refresh_btn = QPushButton("Refresh Leaderboards")
+        refresh_btn.clicked.connect(self.refresh_page)
+        layout.addWidget(refresh_btn)
+
+    def refresh_page(self) -> None:
+        worker = Worker(api.safe_request, "get", "leaderboard")
+        worker.signals.finished.connect(self._on_leaderboard_fetched)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_leaderboard_fetched(self, data: dict) -> None:
+        if not isinstance(data, dict): return
+        
+        self.tokens_list.clear()
+        for i, user in enumerate(data.get("top_tokens", []), 1):
+            self.tokens_list.addItem(f"#{i} {user['username']} - {user['tokens']} tokens")
+            
+        self.creatures_list.clear()
+        for i, user in enumerate(data.get("top_creatures", []), 1):
+            self.creatures_list.addItem(f"#{i} {user['username']} - {user['creature_count']} creatures")
+
+
+class SearchPage(BasePage):
+    def __init__(self, game_window: "GameWindow") -> None:
+        super().__init__(game_window)
+        layout = QVBoxLayout(self)
+        
+        title = QLabel("Player Search")
+        title.setObjectName("title")
+        layout.addWidget(title)
+        
+        search_row = QHBoxLayout()
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Enter username or email...")
+        search_btn = QPushButton("Search")
+        search_btn.clicked.connect(self.search_player)
+        search_row.addWidget(self.search_input)
+        search_row.addWidget(search_btn)
+        layout.addLayout(search_row)
+        
+        self.results_panel = QFrame()
+        self.results_panel.setObjectName("panel")
+        self.results_layout = QVBoxLayout(self.results_panel)
+        self.results_panel.setVisible(False)
+        
+        self.stats_label = QLabel()
+        self.stats_label.setStyleSheet("font-size: 16px; font-weight: 800;")
+        self.creatures_list = QListWidget()
+        
+        self.results_layout.addWidget(self.stats_label)
+        self.results_layout.addWidget(QLabel("<b>CREATURES</b>"))
+        self.results_layout.addWidget(self.creatures_list)
+        
+        layout.addWidget(self.results_panel)
+        layout.addStretch()
+
+    def search_player(self) -> None:
+        query = self.search_input.text().strip()
+        if not query: return
+        
+        worker = Worker(api.safe_request, "get", f"player_stats/{query}")
+        worker.signals.finished.connect(self._on_search_result)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_search_result(self, data: dict) -> None:
+        if not isinstance(data, dict) or data.get("status") == "error":
+            show_error(self, data.get("message", "Player not found."))
+            self.results_panel.setVisible(False)
+            return
+            
+        self.results_panel.setVisible(True)
+        self.stats_label.setText(f"Player: {data['username']} | Tokens: {data['tokens']} | Collection: {data['creature_count']}")
+        
+        self.creatures_list.clear()
+        for c in data.get("creatures", []):
+            self.creatures_list.addItem(f"{c['display_name']} ({c['rarity']}) - Lv {c['level']}")
+
+
+class ChatPage(BasePage):
+    def __init__(self, game_window: "GameWindow") -> None:
+        super().__init__(game_window)
+        layout = QVBoxLayout(self)
+        
+        title = QLabel("Global Chat")
+        title.setObjectName("title")
+        layout.addWidget(title)
+        
+        self.chat_display = QListWidget()
+        self.chat_display.setStyleSheet("background: #F4E4BC; color: #2D1F16;")
+        layout.addWidget(self.chat_display)
+        
+        input_row = QHBoxLayout()
+        self.message_input = QLineEdit()
+        self.message_input.setPlaceholderText("Type a message...")
+        self.message_input.returnPressed.connect(self.send_message)
+        send_btn = QPushButton("Send")
+        send_btn.clicked.connect(self.send_message)
+        input_row.addWidget(self.message_input)
+        input_row.addWidget(send_btn)
+        layout.addLayout(input_row)
+        
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.setInterval(5000)
+        self.refresh_timer.timeout.connect(self.refresh_page)
+
+    def showEvent(self, event) -> None:
+        self.refresh_page()
+        self.refresh_timer.start()
+        super().showEvent(event)
+
+    def hideEvent(self, event) -> None:
+        self.refresh_timer.stop()
+        super().hideEvent(event)
+
+    def refresh_page(self) -> None:
+        worker = Worker(api.safe_request, "get", "chat")
+        worker.signals.finished.connect(self._on_chat_fetched)
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_chat_fetched(self, data: list) -> None:
+        if not isinstance(data, list): return
+        
+        # Only update if new messages
+        if self.chat_display.count() == len(data): return
+        
+        self.chat_display.clear()
+        for msg in reversed(data): # Show newest at bottom
+            item = f"[{msg['created_at'][11:16]}] {msg['username']}: {msg['message']}"
+            self.chat_display.addItem(item)
+        self.chat_display.scrollToBottom()
+
+    def send_message(self) -> None:
+        text = self.message_input.text().strip()
+        if not text: return
+        
+        self.message_input.clear()
+        worker = Worker(api.safe_request, "post", "chat", json={
+            "user_id": self.game_window.current_user.get("id"),
+            "message": text
+        })
+        worker.signals.finished.connect(self.refresh_page)
+        QThreadPool.globalInstance().start(worker)
+
+
 class GameWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -2063,6 +2282,9 @@ class GameWindow(QMainWindow):
             ("inventory", "Inventory"),
             ("trading", "Trading"),
             ("fighting", "Fighting"),
+            ("leaderboard", "Leaderboard"),
+            ("search", "Player Search"),
+            ("chat", "Chat"),
             ("profile", "Profile"),
         ]:
             button = QPushButton(label)
@@ -2093,6 +2315,9 @@ class GameWindow(QMainWindow):
             "inventory": InventoryPage(self),
             "trading": TradingLobby(self),
             "fighting": FightingLobby(self),
+            "leaderboard": LeaderboardPage(self),
+            "search": SearchPage(self),
+            "chat": ChatPage(self),
             "profile": ProfilePage(self),
         }
         for page in self.pages.values():

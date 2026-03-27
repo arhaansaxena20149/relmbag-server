@@ -63,17 +63,20 @@ DROP_RATES = {
 }
 
 BASE_VALUES = {
-    "Common": 10,
-    "Uncommon": 25,
-    "Rare": 60,
-    "Epic": 150,
-    "Legendary": 400,
-    "Mythic": 1000,
-    "Godly": 2500,
-    "Celestial": 6000,
-    "Multiversal": 15000,
-    "Ultimate": 50000,
+    "Common": 20,
+    "Uncommon": 80,
+    "Rare": 250,
+    "Epic": 750,
+    "Legendary": 2500,
+    "Mythic": 8000,
+    "Godly": 25000,
+    "Celestial": 75000,
+    "Multiversal": 200000,
+    "Ultimate": 1000000,
 }
+
+# Daily Rewards Config
+DAILY_REWARDS = [20, 30, 40, 60, 100, 150, 200] # Tokens per day for 7-day streak
 
 RARITY_COLORS = {
     "Common": "#9AA0A6",
