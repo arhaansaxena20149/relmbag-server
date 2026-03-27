@@ -1859,7 +1859,7 @@ class GameWindow(QMainWindow):
         self.last_trade_statuses: dict[int, str] = {}
 
         self.notification_timer = QTimer(self)
-        self.notification_timer.setInterval(3500)
+        self.notification_timer.setInterval(10000)
         self.notification_timer.timeout.connect(self.check_notifications)
 
         self.root_stack = QStackedWidget()

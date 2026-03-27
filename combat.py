@@ -431,7 +431,7 @@ def create_battle(challenger_id: int, opponent_username: str, challenger_creatur
             """
             SELECT id
             FROM battles
-            WHERE status IN ('pending', 'active')
+            WHERE status IN ('active')
               AND (
                   (challenger_id = ? AND opponent_id = ?)
                   OR
@@ -442,7 +442,7 @@ def create_battle(challenger_id: int, opponent_username: str, challenger_creatur
             (challenger_id, opponent["id"], opponent["id"], challenger_id),
         ).fetchone()
         if existing is not None:
-            raise CombatError("There is already an unresolved battle between these players.")
+            raise CombatError("There is already an active battle between these players.")
 
         _get_owned_creature(connection, challenger_id, challenger_creature_id)
         _assert_creature_available(connection, challenger_creature_id)

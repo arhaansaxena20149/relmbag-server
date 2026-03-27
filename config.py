@@ -50,16 +50,16 @@ RARITY_ORDER = [
 RARITY_INDEX = {rarity: index for index, rarity in enumerate(RARITY_ORDER)}
 
 DROP_RATES = {
-    "Common": 40.0,
-    "Uncommon": 25.0,
-    "Rare": 15.0,
-    "Epic": 8.0,
-    "Legendary": 5.0,
-    "Mythic": 3.0,
-    "Godly": 2.0,
-    "Celestial": 1.0,
-    "Multiversal": 0.7,
-    "Ultimate": 0.3,
+    "Common": 72.0,
+    "Uncommon": 18.0,
+    "Rare": 6.0,
+    "Epic": 2.5,
+    "Legendary": 1.0,
+    "Mythic": 0.4,
+    "Godly": 0.15,
+    "Celestial": 0.07,
+    "Multiversal": 0.03,
+    "Ultimate": 0.01,
 }
 
 BASE_VALUES = {

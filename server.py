@@ -79,16 +79,16 @@ import auth # Import auth after defining helpers to avoid circularity if needed,
 
 def roll_rarity():
     rarities = [
-        ("Common", 40),
-        ("Uncommon", 25),
-        ("Rare", 15),
-        ("Epic", 8),
-        ("Legendary", 5),
-        ("Mythic", 3),
-        ("Godly", 2),
-        ("Celestial", 1),
-        ("Multiversal", 0.7),
-        ("Ultimate", 0.3),
+        ("Common", 72.0),
+        ("Uncommon", 18.0),
+        ("Rare", 6.0),
+        ("Epic", 2.5),
+        ("Legendary", 1.0),
+        ("Mythic", 0.4),
+        ("Godly", 0.15),
+        ("Celestial", 0.07),
+        ("Multiversal", 0.03),
+        ("Ultimate", 0.01),
     ]
 
     roll = random.uniform(0, 100)
