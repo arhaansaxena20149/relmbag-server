@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -9,7 +10,9 @@ ASSETS_DIR = BASE_DIR / "assets"
 ICONS_DIR = ASSETS_DIR / "icons"
 GENERATED_DIR = ASSETS_DIR / "generated"
 SPRITE_OUTPUT_DIR = GENERATED_DIR / "sprites"
-DATABASE_PATH = BASE_DIR / "game.db"
+
+# Use environment variable for persistent storage on Render
+DATABASE_PATH = Path(os.environ.get("RELMBAG_DB_PATH", BASE_DIR / "game.db"))
 # If the above doesn't persist on Render, try using a absolute path to a persistent disk if you have one mounted.
 USER_SPRITE_SHEET_PATH = ASSETS_DIR / "sprite_sheet.png"
 DEMO_SPRITE_SHEET_PATH = GENERATED_DIR / "demo_sprite_sheet.png"
