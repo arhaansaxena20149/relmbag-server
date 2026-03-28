@@ -63,16 +63,16 @@ DROP_RATES = {
 }
 
 BASE_VALUES = {
-    "Common": 20,
-    "Uncommon": 80,
-    "Rare": 250,
-    "Epic": 750,
-    "Legendary": 2500,
-    "Mythic": 8000,
-    "Godly": 25000,
-    "Celestial": 75000,
-    "Multiversal": 200000,
-    "Ultimate": 1000000,
+    "Common": 50,
+    "Uncommon": 200,
+    "Rare": 1000,
+    "Epic": 5000,
+    "Legendary": 25000,
+    "Mythic": 100000,
+    "Godly": 500000,
+    "Celestial": 2000000,
+    "Multiversal": 10000000,
+    "Ultimate": 50000000,
 }
 
 # Daily Rewards Config

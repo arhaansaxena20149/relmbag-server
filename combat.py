@@ -429,9 +429,9 @@ def create_battle(challenger_id: int, opponent_username: str, challenger_creatur
 
         existing = connection.execute(
             """
-            SELECT id
+            SELECT id, status
             FROM battles
-            WHERE status IN ('active')
+            WHERE (status = 'active' OR status = 'pending')
               AND (
                   (challenger_id = ? AND opponent_id = ?)
                   OR
@@ -441,8 +441,14 @@ def create_battle(challenger_id: int, opponent_username: str, challenger_creatur
             """,
             (challenger_id, opponent["id"], opponent["id"], challenger_id),
         ).fetchone()
+        
         if existing is not None:
-            raise CombatError("There is already an active battle between these players.")
+            if existing["status"] == 'active':
+                raise CombatError("There is already an active battle between these players.")
+            else:
+                # If there's a pending battle, we allow another one OR we could just update the existing one.
+                # To be safe and avoid "unresolved" errors, let's just delete the old pending one.
+                connection.execute("DELETE FROM battles WHERE id = ?", (existing["id"],))
 
         _get_owned_creature(connection, challenger_id, challenger_creature_id)
         _assert_creature_available(connection, challenger_creature_id)

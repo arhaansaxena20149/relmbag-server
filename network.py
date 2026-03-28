@@ -4,9 +4,13 @@ import requests
 import json
 import os
 import urllib3
+import time
 
 # Disable insecure request warnings for development
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Use a global session for connection pooling (HUGE performance boost on Windows)
+_session = requests.Session()
 
 # Default to the production Render server for playtesters
 # We now force USE_REMOTE to True so that built apps connect to Render automatically
@@ -20,12 +24,15 @@ def safe_request(method: str, endpoint: str, **kwargs) -> requests.Response:
     url = f"{SERVER_URL}/{endpoint}"
     try:
         # Use SSL verification for remote server, disable for local if needed
-        # Increased timeout to 120s for Render spin-up/slow response
         verify_ssl = USE_REMOTE
-        response = requests.request(method, url, timeout=120, verify=verify_ssl, **kwargs)
-        print(f"[DEBUG] {method.upper()} {url} - Status: {response.status_code}")
-        # We don't call raise_for_status() here anymore because we want to handle
-        # 4xx errors gracefully in the application logic by reading the response JSON.
+        
+        # Use the persistent session for faster requests
+        response = _session.request(method, url, timeout=120, verify=verify_ssl, **kwargs)
+        
+        # Log performance issues
+        if response.elapsed.total_seconds() > 2.0:
+            print(f"[WARN] Slow request: {method.upper()} {url} took {response.elapsed.total_seconds():.2f}s")
+            
         return response
     except Exception as error:
         print(f"[ERROR] Network request failed for {method.upper()} {url}: {error}")
