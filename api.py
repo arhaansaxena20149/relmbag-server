@@ -1,6 +1,13 @@
 from __future__ import annotations
 from network import safe_request, safe_json
 
+def request_json(method: str, endpoint: str, **kwargs):
+    """
+    Perform a request and return the decoded JSON payload.
+    """
+    response = safe_request(method, endpoint, **kwargs)
+    return safe_json(response)
+
 def get_users() -> list[dict]:
     """
     Fetches a list of all users from the server.
@@ -276,4 +283,3 @@ def reset_password(user_id: int | str, new_password: str) -> bool:
     except Exception as e:
         print(f"[ERROR] Failed to reset password for user {user_id}: {e}")
         return False
-

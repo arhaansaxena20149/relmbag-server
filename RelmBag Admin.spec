@@ -41,5 +41,6 @@ app = BUNDLE(
     exe,
     name='RelmBag Admin.app',
     icon='assets/icons/pebblit.icns',
-    bundle_identifier=None,
+    bundle_identifier='com.relmbag.admin',
+    version='1.0.0',
 )

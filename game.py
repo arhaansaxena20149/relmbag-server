@@ -650,7 +650,7 @@ class CratePage(BasePage):
         if not user: return
         
         self.claim_daily_btn.setEnabled(False)
-        worker = Worker(api.safe_request, "post", "claim_daily", json={"user_id": user.get("id")})
+        worker = Worker(api.request_json, "post", "claim_daily", json={"user_id": user.get("id")})
         worker.signals.finished.connect(self._on_daily_claimed)
         worker.signals.error.connect(lambda e: self._on_daily_error(str(e)))
         QThreadPool.globalInstance().start(worker)
@@ -1062,7 +1062,7 @@ class InventoryPage(BasePage):
         )
         
         if reply == QMessageBox.Yes:
-            worker = Worker(api.safe_request, "post", "sell_creature", json={
+            worker = Worker(api.request_json, "post", "sell_creature", json={
                 "user_id": self.game_window.current_user.get("username"),
                 "creature_id": self.selected_creature_id
             })
@@ -2084,7 +2084,7 @@ class LeaderboardPage(BasePage):
         layout.addWidget(refresh_btn)
 
     def refresh_page(self) -> None:
-        worker = Worker(api.safe_request, "get", "leaderboard")
+        worker = Worker(api.request_json, "get", "leaderboard")
         worker.signals.finished.connect(self._on_leaderboard_fetched)
         QThreadPool.globalInstance().start(worker)
 
@@ -2138,12 +2138,17 @@ class SearchPage(BasePage):
         query = self.search_input.text().strip()
         if not query: return
         
-        worker = Worker(api.safe_request, "get", f"player_stats/{query}")
+        worker = Worker(api.request_json, "get", f"player_stats/{query}")
         worker.signals.finished.connect(self._on_search_result)
         QThreadPool.globalInstance().start(worker)
 
     def _on_search_result(self, data: dict) -> None:
-        if not isinstance(data, dict) or data.get("status") == "error":
+        if not isinstance(data, dict):
+            show_error(self, "Player search failed. Please try again.")
+            self.results_panel.setVisible(False)
+            return
+
+        if data.get("status") == "error":
             show_error(self, data.get("message", "Player not found."))
             self.results_panel.setVisible(False)
             return
@@ -2193,16 +2198,13 @@ class ChatPage(BasePage):
         super().hideEvent(event)
 
     def refresh_page(self) -> None:
-        worker = Worker(api.safe_request, "get", "chat")
+        worker = Worker(api.request_json, "get", "chat")
         worker.signals.finished.connect(self._on_chat_fetched)
         QThreadPool.globalInstance().start(worker)
 
     def _on_chat_fetched(self, data: list) -> None:
         if not isinstance(data, list): return
-        
-        # Only update if new messages
-        if self.chat_display.count() == len(data): return
-        
+
         self.chat_display.clear()
         for msg in reversed(data): # Show newest at bottom
             item = f"[{msg['created_at'][11:16]}] {msg['username']}: {msg['message']}"
@@ -2214,11 +2216,11 @@ class ChatPage(BasePage):
         if not text: return
         
         self.message_input.clear()
-        worker = Worker(api.safe_request, "post", "chat", json={
+        worker = Worker(api.request_json, "post", "chat", json={
             "user_id": self.game_window.current_user.get("id"),
             "message": text
         })
-        worker.signals.finished.connect(self.refresh_page)
+        worker.signals.finished.connect(lambda _: self.refresh_page())
         QThreadPool.globalInstance().start(worker)
 
 
@@ -2486,6 +2488,12 @@ class GameWindow(QMainWindow):
                 continue
             self.seen_trade_notifications.add(request.get("id"))
             self._handle_trade_request_popup(request)
+
+        for request in incoming_battles:
+            if request.get("id") in self.seen_battle_notifications:
+                continue
+            self.seen_battle_notifications.add(request.get("id"))
+            self._handle_battle_request_popup(request)
 
         # 2. Detect transitions from 'pending' to 'active' or 'open' for outgoing requests
         for trade in all_trades:

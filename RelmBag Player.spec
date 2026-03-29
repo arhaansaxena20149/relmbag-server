@@ -41,5 +41,6 @@ app = BUNDLE(
     exe,
     name='RelmBag Player.app',
     icon='assets/icons/pebblit.icns',
-    bundle_identifier=None,
+    bundle_identifier='com.relmbag.player',
+    version='1.0.0',
 )
