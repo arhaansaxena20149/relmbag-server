@@ -10,10 +10,34 @@ ASSETS_DIR = BASE_DIR / "assets"
 ICONS_DIR = ASSETS_DIR / "icons"
 GENERATED_DIR = ASSETS_DIR / "generated"
 SPRITE_OUTPUT_DIR = GENERATED_DIR / "sprites"
+LEGACY_DATABASE_PATH = BASE_DIR / "game.db"
+DEFAULT_DATABASE_PATH = DATA_DIR / "game.db"
 
-# Use environment variable for persistent storage on Render
-DATABASE_PATH = Path(os.environ.get("RELMBAG_DB_PATH", BASE_DIR / "game.db"))
-# If the above doesn't persist on Render, try using a absolute path to a persistent disk if you have one mounted.
+def _running_on_render() -> bool:
+    return os.environ.get("RENDER", "").lower() == "true"
+
+
+def _resolve_database_path() -> tuple[Path, str]:
+    configured_path = os.environ.get("RELMBAG_DB_PATH")
+    if configured_path:
+        return Path(configured_path).expanduser(), "env:RELMBAG_DB_PATH"
+
+    if _running_on_render():
+        render_disk_root = Path("/var/data")
+        if render_disk_root.exists():
+            return render_disk_root / "relmbag" / "game.db", "render:/var/data"
+        return DEFAULT_DATABASE_PATH, "render:data/game.db"
+
+    if DEFAULT_DATABASE_PATH.exists():
+        return DEFAULT_DATABASE_PATH, "local:data/game.db"
+
+    if LEGACY_DATABASE_PATH.exists():
+        return LEGACY_DATABASE_PATH, "local:legacy-root"
+
+    return DEFAULT_DATABASE_PATH, "default:data/game.db"
+
+
+DATABASE_PATH, DATABASE_PATH_SOURCE = _resolve_database_path()
 USER_SPRITE_SHEET_PATH = ASSETS_DIR / "sprite_sheet.png"
 DEMO_SPRITE_SHEET_PATH = GENERATED_DIR / "demo_sprite_sheet.png"
 APP_ICON_PNG = ICONS_DIR / "pebblit_app_icon.png"
@@ -298,3 +322,4 @@ CREATURES_BY_RARITY = {
 def ensure_directories() -> None:
     for directory in (DATA_DIR, ASSETS_DIR, ICONS_DIR, GENERATED_DIR, SPRITE_OUTPUT_DIR):
         directory.mkdir(parents=True, exist_ok=True)
+    DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)

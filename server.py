@@ -6,7 +6,7 @@ import random
 import time
 import os
 import uuid
-from config import DATABASE_PATH, DAILY_REWARDS
+from config import DATABASE_PATH, DATABASE_PATH_SOURCE, DAILY_REWARDS
 import database
 from database import transaction, _create_schema
 import trading
@@ -46,6 +46,13 @@ def resolve_user(identifier):
         return None
 
 def init_db():
+    logger.info("Initializing database at %s (%s)", DATABASE_PATH, DATABASE_PATH_SOURCE)
+    if os.environ.get("RENDER", "").lower() == "true" and "RELMBAG_DB_PATH" not in os.environ:
+        logger.warning(
+            "RELMBAG_DB_PATH is not set. To keep player data across redeploys, mount a Render persistent "
+            "disk and point RELMBAG_DB_PATH at it, or mount the disk at %s.",
+            DATABASE_PATH.parent,
+        )
     database.initialize_database()
 
 init_db()
