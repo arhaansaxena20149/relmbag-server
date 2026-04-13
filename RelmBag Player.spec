@@ -1,11 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+APP_NAME = "RelmBag Player"
+APP_ID = "com.relmbag.player"
+APP_VERSION = "1.2"
 
 a = Analysis(
-    ['game.py'],
+    ["game.py"],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets')],
+    datas=[("assets", "assets")],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -14,6 +17,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -22,7 +26,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='RelmBag Player',
+    name=APP_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -35,11 +39,19 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['assets\\icons\\pebblit.ico'],
+    icon="assets/icons/pebblit.icns",
 )
+
 app = BUNDLE(
     exe,
-    name='RelmBag Player.app',
-    icon='assets/icons/pebblit.icns',
-    bundle_identifier=None,
+    name=f"{APP_NAME}.app",
+    icon="assets/icons/pebblit.icns",
+    bundle_identifier=APP_ID,
+    info_plist={
+        "CFBundleDisplayName": APP_NAME,
+        "CFBundleName": APP_NAME,
+        "CFBundleShortVersionString": APP_VERSION,
+        "CFBundleVersion": APP_VERSION,
+        "NSHighResolutionCapable": True,
+    },
 )

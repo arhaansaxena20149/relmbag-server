@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # RelmBag DMG Build Script
-# Version: 1.2.0
+# Version: 1.2
 
-VERSION="1.2.0"
+VERSION="1.2"
 ICON="assets/icons/pebblit.icns"
 
 # Ensure create-dmg and pyinstaller are available
@@ -30,7 +30,7 @@ build_app() {
     rm -rf build dist "${output_dmg}"
 
     # 2. Build .app bundle using spec file
-    pyinstaller --noconsole --noconfirm "${spec_file}"
+    python3 -m PyInstaller --noconfirm --clean "${spec_file}"
 
     if [ $? -ne 0 ]; then
         echo "[ERROR] PyInstaller failed for ${app_name}"
@@ -39,26 +39,23 @@ build_app() {
 
     # 3. Create DMG
     echo "Creating DMG for ${app_name}..."
-    create-dmg \
-        --volname "${app_name} ${VERSION}" \
-        --volicon "${ICON}" \
-        --window-pos 200 120 \
-        --window-size 800 400 \
-        --icon-size 100 \
-        --icon "${app_name}.app" 200 190 \
-        --hide-extension "${app_name}.app" \
-        --app-drop-link 600 185 \
-        "${output_dmg}" \
-        "dist/${app_name}.app"
+    npx create-dmg "dist/${app_name}.app" . --overwrite --no-code-sign --no-version-in-filename --dmg-title="${app_name}"
+
+    if [ ! -f "${app_name}.dmg" ]; then
+        echo "[ERROR] create-dmg did not produce ${app_name}.dmg"
+        return 1
+    fi
+
+    mv -f "${app_name}.dmg" "${output_dmg}"
 
     echo "Successfully created: ${output_dmg}"
 }
 
 # Build Player App
-build_app "RelmBag.Player.spec" "RelmBag" "RelmBag.Player.${VERSION}.dmg"
+build_app "RelmBag Player.spec" "RelmBag Player" "RelmBag.Player.${VERSION}.dmg"
 
 # Build Admin App
-build_app "RelmBag.Admin.spec" "RelmBagAdmin" "RelmBag.Admin.${VERSION}.dmg"
+build_app "RelmBag Admin.spec" "RelmBag Admin" "RelmBag.Admin.${VERSION}.dmg"
 
 echo "------------------------------------------------"
 echo "Build Process Complete!"
