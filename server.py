@@ -969,9 +969,12 @@ def admin_abuse():
     if action not in valid_actions:
         return jsonify({"status": "error", "message": "Unknown admin action"}), 400
 
-    target_user = resolve_user(target_user_id) if target_user_id is not None else None
-    if target_user_id is not None and not target_user:
-        return jsonify({"status": "error", "message": "Target not found"}), 404
+    # Ensure target_user is loaded correctly if user_id is provided
+    target_user = None
+    if target_user_id:
+        target_user = resolve_user(target_user_id)
+        if not target_user:
+            return jsonify({"status": "error", "message": "Target not found"}), 404
     
     try:
         affected = 0
@@ -1007,6 +1010,7 @@ def admin_abuse():
                 response_message = "Global announcement sent."
                 logger.info(f"Admin Abuse: Global announcement: {message}")
             elif action == "token_chaos":
+                import random
                 users = conn.execute("SELECT id FROM users").fetchall()
                 for row in users:
                     chaos_amount = random.randint(-500, 1000)
@@ -1014,7 +1018,7 @@ def admin_abuse():
                 affected = len(users)
                 response_message = "Token chaos hit every player."
                 logger.info(f"Admin Abuse: Token Chaos executed")
-            elif action == "set_tokens" and target_user is None:
+            elif action == "set_tokens" and not target_user:
                 conn.execute("UPDATE users SET tokens = ?", (amount,))
                 affected = conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"]
                 response_message = f"Set every player's tokens to {amount}."
@@ -1037,6 +1041,7 @@ def admin_abuse():
                     response_message = f"Set {target_user['username']}'s tokens to {amount}."
                     logger.info(f"Admin Abuse: Set tokens to {amount} for {target_user['username']}")
                 elif action == "give_godly_set":
+                    import random
                     for rarity in ["Godly", "Celestial", "Multiversal", "Ultimate"]:
                         available = CREATURES.get(rarity, ["Pebblit"])
                         creature_key = random.choice(available).lower().replace(" ", "_")
@@ -1052,6 +1057,7 @@ def admin_abuse():
                     response_message = f"Gave a high-tier creature set to {target_user['username']}."
                     logger.info(f"Admin Abuse: Gave Godly set to {target_user['username']}")
                 elif action == "chaos_mutation":
+                    import random
                     mutations = [mutation for mutation in MUTATION_RATES.keys() if mutation != "None"]
                     creatures = conn.execute("SELECT id FROM owned_creatures WHERE user_id = ?", (target_user["id"],)).fetchall()
                     for creature in creatures:

@@ -31,7 +31,10 @@ if %ERRORLEVEL% NEQ 0 (
     exit /b %ERRORLEVEL%
 )
 
+copy /Y "dist\RelmBag Player.exe" "RelmBag.Player.%VERSION%.exe" >nul
+copy /Y "dist\RelmBag Admin.exe" "RelmBag.Admin.%VERSION%.exe" >nul
+
 echo ------------------------------------------------
-echo Build Process Complete! Files are in the 'dist' folder.
+echo Build Process Complete! Files are in the 'dist' folder and versioned release copies are in the repo root.
 echo ------------------------------------------------
 pause
