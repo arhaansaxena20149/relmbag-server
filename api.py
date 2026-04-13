@@ -262,6 +262,29 @@ def add_tokens(user_id: int | str, amount: int) -> bool:
         print(f"[ERROR] Failed to add tokens for user {user_id}: {e}")
         return False
 
+def admin_abuse(action: str, user_id: int | str | None = None, amount: int = 0, message: str = "") -> dict:
+    try:
+        payload = {"action": action, "amount": amount, "message": message}
+        if user_id is not None:
+            payload["user_id"] = user_id
+        response = safe_request("post", "admin/abuse", json=payload)
+        return safe_json(response) or {}
+    except Exception as e:
+        print(f"[ERROR] Failed to execute admin abuse action '{action}': {e}")
+        return {}
+
+def admin_give_creature(user_id: int | str, creature_name: str, level: int = 1) -> dict:
+    try:
+        response = safe_request("post", "admin/give_creature", json={
+            "user_id": user_id,
+            "creature_name": creature_name,
+            "level": level,
+        })
+        return safe_json(response) or {}
+    except Exception as e:
+        print(f"[ERROR] Failed to give creature '{creature_name}' to user {user_id}: {e}")
+        return {}
+
 def reset_password(user_id: int | str, new_password: str) -> bool:
     try:
         # Fallback to ensure we have a valid identifier

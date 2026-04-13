@@ -13,6 +13,7 @@ from config import (
     APP_ICON_PNG,
     APP_TITLE,
     BASE_VALUES,
+    CREATURE_CATALOG,
     CRATE_COST,
     DATABASE_PATH,
     DATABASE_PATH_SOURCE,
@@ -23,6 +24,7 @@ from config import (
     MUTATION_COST,
     MUTATION_RATES,
     DAILY_REWARDS,
+    slugify,
 )
 import database
 from database import transaction, _create_schema
@@ -45,6 +47,11 @@ CORS(app) # Enable CORS for all routes
 # Use the centralized database path
 DB_NAME = str(DATABASE_PATH)
 
+GLOBAL_ANNOUNCEMENT = {
+    "message": "",
+    "timestamp": 0
+}
+
 # --------------------------
 # DATABASE
 # --------------------------
@@ -63,9 +70,13 @@ def resolve_user(identifier):
         logger.error(f"Error resolving user '{identifier}': {e}")
         return None
 
+def _coerce_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
 def init_db():
-    print(f"[STARTUP] Initializing database at {DATABASE_PATH}...")
-    print(f"[STARTUP] Path Source: {DATABASE_PATH_SOURCE}")
     logger.info("Initializing database at %s (%s)", DATABASE_PATH, DATABASE_PATH_SOURCE)
     if os.environ.get("RENDER", "").lower() == "true" and "RELMBAG_DB_PATH" not in os.environ:
         logger.warning(
@@ -242,7 +253,7 @@ def get_users():
     try:
         # Increased threshold to 90s to be more resilient to network lag
         users = database.list_admin_players(within_seconds=90)
-        logger.info(f"Fetched {len(users)} users for admin/roster.")
+        logger.debug("Fetched %d users for admin/roster.", len(users))
         # Unify online status keys for client compatibility
         for u in users:
             u["online"] = bool(u.get("is_online", False))
@@ -257,6 +268,8 @@ def ban_user():
     data = request.json or {}
     user_id = data.get("user_id")
     is_banned = data.get("is_banned", True)
+    if user_id is None:
+        return jsonify({"status": "error", "message": "Missing user_id"}), 400
     try:
         database.ban_user(user_id, is_banned)
         action = "banned" if is_banned else "unbanned"
@@ -270,6 +283,8 @@ def ban_user():
 def kick_user():
     data = request.json or {}
     user_id = data.get("user_id")
+    if user_id is None:
+        return jsonify({"status": "error", "message": "Missing user_id"}), 400
     try:
         database.kick_user(user_id)
         logger.info(f"User {user_id} kicked")
@@ -281,10 +296,10 @@ def kick_user():
 @app.route("/add_tokens", methods=["POST"])
 def add_tokens():
     data = request.json or {}
-    amount = data.get("amount")
+    amount = _coerce_int(data.get("amount"), 0)
     user_id = data.get("user_id")
 
-    if amount is None or user_id is None:
+    if user_id is None:
         return jsonify({"status": "error", "message": "Invalid data"}), 400
 
     try:
@@ -297,8 +312,8 @@ def add_tokens():
         if not user:
              return jsonify({"status": "error", "message": "User not found"}), 404
              
-        database.adjust_user_tokens(user["id"], amount)
-        return jsonify({"status": "success"})
+        current_tokens = database.adjust_user_tokens(user["id"], amount)
+        return jsonify({"status": "success", "current_tokens": current_tokens})
     except Exception as e:
         logger.error(f"Failed to add tokens: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -778,7 +793,7 @@ def admin_give_creature():
     data = request.json or {}
     user_id = data.get("user_id")
     creature_name = data.get("creature_name")
-    level = data.get("level", 1)
+    level = max(1, min(_coerce_int(data.get("level", 1), 1), MAX_LEVEL))
     
     if not user_id or not creature_name:
         return jsonify({"status": "error", "message": "Missing required data"}), 400
@@ -787,19 +802,17 @@ def admin_give_creature():
         user = resolve_user(user_id)
         if not user:
             return jsonify({"status": "error", "message": "User not found"}), 404
-            
-        # Find rarity for the creature
-        rarity = "Common"
-        creature_key = creature_name.lower().replace(" ", "_")
-        for r, creatures in CREATURES.items():
-            if any(c.lower().replace(" ", "_") == creature_key for c in creatures):
-                rarity = r
-                break
+
+        creature_key = slugify(str(creature_name))
+        template = CREATURE_CATALOG.get(creature_key)
+        if template is None:
+            return jsonify({"status": "error", "message": "Unknown creature"}), 404
+        rarity = template.get("rarity", "Common")
                 
         creature_id = database.insert_creature(
             user_id=user["id"],
             creature_key=creature_key,
-            creature_name=creature_name.title(),
+            creature_name=template.get("name", str(creature_name).title()),
             rarity=rarity,
             image_path=f"assets/generated/sprites/{creature_key}.png",
             value_roll=1.0
@@ -810,8 +823,13 @@ def admin_give_creature():
             with transaction() as conn:
                 conn.execute("UPDATE owned_creatures SET level = ? WHERE id = ?", (level, creature_id))
                 
-        logger.info(f"Admin gave {creature_name} (Lv {level}) to {user['username']}")
-        return jsonify({"status": "success"})
+        logger.info(f"Admin gave {template.get('name', creature_name)} (Lv {level}) to {user['username']}")
+        return jsonify({
+            "status": "success",
+            "message": f"Gave {template.get('name', creature_name)} (Lv {level}) to {user['username']}.",
+            "creature_id": creature_id,
+            "rarity": rarity,
+        })
     except Exception as e:
         logger.error(f"Admin give creature failed: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -831,14 +849,22 @@ def heartbeat():
             if user.get("is_banned"):
                 return jsonify({"status": "error", "message": "banned"}), 403
             
-            # Enforce session token if one is active on the server.
-            # This allows the 'kick' functionality to work by clearing the token on the server.
+            # Enforce session token
             server_token = user.get("session_token")
             if server_token and session_token != server_token:
                  return jsonify({"status": "error", "message": "kicked"}), 401
 
             database.touch_user_presence(user["id"])
-        return jsonify({"status": "ok"})
+            
+            # FIX: Return current user state for instant synchronization
+            return jsonify({
+                "status": "ok",
+                "tokens": user["tokens"],
+                "is_banned": bool(user["is_banned"]),
+                "creature_count": database.get_creature_count_for_user(user["id"]),
+                "global_announcement": GLOBAL_ANNOUNCEMENT
+            })
+        return jsonify({"status": "error", "message": "User not found"}), 404
     except Exception as e:
         logger.error(f"Heartbeat failed: {e}")
         return jsonify({"status": "error"}), 500
@@ -932,35 +958,112 @@ def game_reward():
 def admin_abuse():
     data = request.json or {}
     action = data.get("action")
-    amount = data.get("amount", 0)
-    message = data.get("message", "")
+    target_user_id = data.get("user_id") # Optional specific target
+    amount = _coerce_int(data.get("amount", 0), 0)
+    message = str(data.get("message", "") or "").strip()
+
+    global_actions = {"give_all_tokens", "ban_everyone", "unban_everyone", "global_announcement", "token_chaos", "set_tokens"}
+    target_actions = {"reset_creatures", "max_level_creatures", "set_tokens", "give_godly_set", "chaos_mutation"}
+    valid_actions = global_actions | target_actions
+
+    if action not in valid_actions:
+        return jsonify({"status": "error", "message": "Unknown admin action"}), 400
+
+    target_user = resolve_user(target_user_id) if target_user_id is not None else None
+    if target_user_id is not None and not target_user:
+        return jsonify({"status": "error", "message": "Target not found"}), 404
     
     try:
+        affected = 0
+        response_message = "Admin action executed."
+
         with transaction() as conn:
             if action == "give_all_tokens":
                 conn.execute("UPDATE users SET tokens = tokens + ?", (amount,))
+                affected = conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"]
+                response_message = f"Gave every player {amount} tokens."
                 logger.info(f"Admin Abuse: Gave everyone {amount} tokens")
             elif action == "ban_everyone":
-                conn.execute("UPDATE users SET is_banned = 1 WHERE username != 'admin'")
+                conn.execute("UPDATE users SET is_banned = 1, session_token = NULL WHERE username != ?", (ADMIN_USERNAME,))
+                affected = conn.execute("SELECT COUNT(*) AS count FROM users WHERE username != ?", (ADMIN_USERNAME,)).fetchone()["count"]
+                response_message = "Banned everyone except the admin account."
                 logger.info(f"Admin Abuse: Banned everyone")
             elif action == "unban_everyone":
                 conn.execute("UPDATE users SET is_banned = 0")
+                affected = conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"]
+                response_message = "Unbanned every player."
                 logger.info(f"Admin Abuse: Unbanned everyone")
             elif action == "global_announcement":
-                # Find admin user ID
-                admin_user = conn.execute("SELECT id FROM users WHERE username='admin'").fetchone()
+                if not message:
+                    return jsonify({"status": "error", "message": "Announcement message required"}), 400
+                global GLOBAL_ANNOUNCEMENT
+                GLOBAL_ANNOUNCEMENT = {
+                    "message": message,
+                    "timestamp": int(time.time())
+                }
+                admin_user = conn.execute("SELECT id FROM users WHERE username = ?", (ADMIN_USERNAME,)).fetchone()
                 if admin_user:
                     conn.execute("INSERT INTO chat_messages (user_id, message) VALUES (?, ?)", (admin_user["id"], f"[GLOBAL] {message}"))
+                response_message = "Global announcement sent."
                 logger.info(f"Admin Abuse: Global announcement: {message}")
             elif action == "token_chaos":
-                import random
-                # Give every user a random amount of tokens between 1 and 500
                 users = conn.execute("SELECT id FROM users").fetchall()
-                for u in users:
-                    amount = random.randint(1, 500)
-                    conn.execute("UPDATE users SET tokens = tokens + ? WHERE id = ?", (amount, u["id"]))
-                logger.info(f"Admin Abuse: Token Chaos executed for {len(users)} users")
-            return jsonify({"status": "success"})
+                for row in users:
+                    chaos_amount = random.randint(-500, 1000)
+                    conn.execute("UPDATE users SET tokens = MAX(0, tokens + ?) WHERE id = ?", (chaos_amount, row["id"]))
+                affected = len(users)
+                response_message = "Token chaos hit every player."
+                logger.info(f"Admin Abuse: Token Chaos executed")
+            elif action == "set_tokens" and target_user is None:
+                conn.execute("UPDATE users SET tokens = ?", (amount,))
+                affected = conn.execute("SELECT COUNT(*) AS count FROM users").fetchone()["count"]
+                response_message = f"Set every player's tokens to {amount}."
+                logger.info(f"Admin Abuse: Set everyone's tokens to {amount}")
+            
+            if target_user is not None:
+                if action == "reset_creatures":
+                    affected = conn.execute("SELECT COUNT(*) AS count FROM owned_creatures WHERE user_id = ?", (target_user["id"],)).fetchone()["count"]
+                    conn.execute("DELETE FROM owned_creatures WHERE user_id = ?", (target_user["id"],))
+                    response_message = f"Deleted {affected} creatures for {target_user['username']}."
+                    logger.info(f"Admin Abuse: Reset creatures for {target_user['username']}")
+                elif action == "max_level_creatures":
+                    conn.execute("UPDATE owned_creatures SET level = ? WHERE user_id = ?", (MAX_LEVEL, target_user["id"]))
+                    affected = conn.execute("SELECT COUNT(*) AS count FROM owned_creatures WHERE user_id = ?", (target_user["id"],)).fetchone()["count"]
+                    response_message = f"Maxed {affected} creatures for {target_user['username']}."
+                    logger.info(f"Admin Abuse: Max leveled creatures for {target_user['username']}")
+                elif action == "set_tokens":
+                    conn.execute("UPDATE users SET tokens = ? WHERE id = ?", (amount, target_user["id"]))
+                    affected = 1
+                    response_message = f"Set {target_user['username']}'s tokens to {amount}."
+                    logger.info(f"Admin Abuse: Set tokens to {amount} for {target_user['username']}")
+                elif action == "give_godly_set":
+                    for rarity in ["Godly", "Celestial", "Multiversal", "Ultimate"]:
+                        available = CREATURES.get(rarity, ["Pebblit"])
+                        creature_key = random.choice(available).lower().replace(" ", "_")
+                        database.insert_creature(
+                            user_id=target_user["id"],
+                            creature_key=creature_key,
+                            creature_name=creature_key.replace("_", " ").title(),
+                            rarity=rarity,
+                            image_path=f"assets/generated/sprites/{creature_key}.png",
+                            value_roll=1.5
+                        )
+                    affected = 4
+                    response_message = f"Gave a high-tier creature set to {target_user['username']}."
+                    logger.info(f"Admin Abuse: Gave Godly set to {target_user['username']}")
+                elif action == "chaos_mutation":
+                    mutations = [mutation for mutation in MUTATION_RATES.keys() if mutation != "None"]
+                    creatures = conn.execute("SELECT id FROM owned_creatures WHERE user_id = ?", (target_user["id"],)).fetchall()
+                    for creature in creatures:
+                        mutation = random.choice(mutations)
+                        conn.execute("UPDATE owned_creatures SET mutation = ? WHERE id = ?", (mutation, creature["id"]))
+                    affected = len(creatures)
+                    response_message = f"Applied chaos mutations to {affected} creatures for {target_user['username']}."
+                    logger.info(f"Admin Abuse: Chaos mutated creatures for {target_user['username']}")
+                elif action not in global_actions:
+                    return jsonify({"status": "error", "message": "That action requires a supported target flow"}), 400
+
+        return jsonify({"status": "success", "message": response_message, "affected": affected})
     except Exception as e:
         logger.error(f"Admin abuse failed: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500

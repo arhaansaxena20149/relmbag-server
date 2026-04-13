@@ -34,6 +34,7 @@ import crate_system
 import database
 import inventory
 import api
+from network import debug_log
 from config import APP_ICON_PNG, APP_SUBTITLE, APP_TITLE, BASE_VALUES, CRATE_COST, DROP_RATES, RARITY_COLORS, RARITY_ORDER, CREATURES_BY_RARITY, MUTATION_COST, MUTATION_COLORS, MUTATION_RATES
 from ui_shared import APP_STYLESHEET, apply_fade_in, apply_shadow, configure_combo_box, load_pixmap, with_alpha
 from workers import Worker, HeartbeatWorker
@@ -1556,7 +1557,7 @@ class TradingLobby(BasePage):
                 self.send_request_button.setEnabled(True)
                 self.status_label.setText("")
         except Exception as e:
-            print(f"[ERROR] TradingLobby data refresh failed: {e}")
+            debug_log(f"[ERROR] TradingLobby data refresh failed: {e}")
 
     def _on_users_error(self, error: Exception) -> None:
         self._refresh_in_flight = False
@@ -1734,7 +1735,7 @@ class FightingLobby(BasePage):
                 self.status_label.setText(msg)
                 self.status_label.setStyleSheet("color: #8B5E3C;")
         except Exception as e:
-            print(f"[ERROR] FightingLobby data refresh failed: {e}")
+            debug_log(f"[ERROR] FightingLobby data refresh failed: {e}")
 
     def _on_data_error(self, error: Exception) -> None:
         self._refresh_in_flight = False
@@ -3377,6 +3378,7 @@ class GameWindow(QMainWindow):
         self.heartbeat_worker = None
         self.last_battle_statuses: dict[int, str] = {}
         self.last_trade_statuses: dict[int, str] = {}
+        self.last_announcement_time = 0
         self._session_refresh_in_flight = False
         self._notification_fetch_in_flight = False
         self._pending_request_total = 0
@@ -3551,6 +3553,28 @@ class GameWindow(QMainWindow):
         if self.page_stack.currentWidget() is page:
             page.refresh_page()
 
+    def _on_heartbeat_sync(self, status: dict) -> None:
+        """FIX: Instant synchronization from heartbeat response."""
+        if not self.current_user: return
+        
+        # Sync tokens
+        if "tokens" in status:
+            new_tokens = int(status["tokens"])
+            if new_tokens != self.current_user.get("tokens"):
+                self.update_token_balance(new_tokens)
+        
+        # Sync announcements
+        announcement = status.get("global_announcement")
+        if isinstance(announcement, dict) and announcement.get("message"):
+            t = announcement.get("timestamp", 0)
+            if t > self.last_announcement_time:
+                self.last_announcement_time = t
+                QMessageBox.information(self, "📢 Global Announcement", announcement["message"])
+
+        # Sync ban status
+        if status.get("is_banned"):
+            self.logout()
+
     def set_current_user(self, user: dict) -> None:
         self.seen_trade_notifications.clear()
         self.seen_battle_notifications.clear()
@@ -3565,6 +3589,8 @@ class GameWindow(QMainWindow):
         self.heartbeat_worker = HeartbeatWorker(self.current_user["username"], self.current_user.get("session_token"))
         self.heartbeat_worker.kicked.connect(self.logout)
         self.heartbeat_worker.banned.connect(self.logout)
+        # FIX: Connect to status_updated for instant token/state sync
+        self.heartbeat_worker.status_updated.connect(self._on_heartbeat_sync)
         self.heartbeat_worker.start()
 
         self.refresh_session()
@@ -3591,7 +3617,7 @@ class GameWindow(QMainWindow):
             return
 
         if not users:
-            print("[DEBUG] User list is empty, skipping session refresh.")
+            debug_log("[DEBUG] User list is empty, skipping session refresh.")
             return
 
         username = str(self.current_user.get("username", "")).strip().lower()
@@ -3602,7 +3628,7 @@ class GameWindow(QMainWindow):
             return
 
         if user_meta.get("is_banned"):
-            print(f"[DEBUG] User {username} is banned, logging out.")
+            debug_log(f"[DEBUG] User {username} is banned, logging out.")
             QMessageBox.critical(self, "Banned", "Your account has been banned.")
             self.logout()
             return
@@ -3623,7 +3649,7 @@ class GameWindow(QMainWindow):
 
     def _on_session_refresh_error(self, error: Exception) -> None:
         self._session_refresh_in_flight = False
-        print(f"[ERROR] Session refresh failed: {error}")
+        debug_log(f"[ERROR] Session refresh failed: {error}")
 
     def navigate(self, key: str) -> None:
         if key not in self.pages:
@@ -3722,7 +3748,7 @@ class GameWindow(QMainWindow):
 
     def _on_notifications_error(self, error: Exception) -> None:
         self._notification_fetch_in_flight = False
-        print(f"[ERROR] Notification refresh failed: {error}")
+        debug_log(f"[ERROR] Notification refresh failed: {error}")
 
     def _handle_trade_request_popup(self, request: dict) -> None:
         message_box = QMessageBox(self)

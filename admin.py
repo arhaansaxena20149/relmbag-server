@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
     QApplication,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -27,7 +28,6 @@ import database
 import api
 from config import ADMIN_PASSWORD, ADMIN_USERNAME, APP_ICON_PNG, APP_TITLE
 from ui_shared import APP_STYLESHEET, apply_fade_in, with_alpha
-from network import safe_request, safe_json
 from workers import Worker
 
 from api import get_users
@@ -114,8 +114,18 @@ class AdminAbusePage(QWidget):
         party_btn.setStyleSheet("background: #E91E63; color: white;")
         party_btn.clicked.connect(lambda: self.global_abuse("global_announcement", message="🎉 GLOBAL PARTY XP EVENT STARTED! 🎉"))
 
+        # COOLER ABUSE
+        extra_title = QLabel("EXTRA CHAOS")
+        extra_title.setObjectName("sectionTitle")
+        games_layout.addWidget(extra_title)
+
+        nuke_btn = QPushButton("NUKE TOKENS (Everyone to 0)")
+        nuke_btn.setObjectName("dangerButton")
+        nuke_btn.clicked.connect(lambda: self.global_abuse("set_tokens", amount=0))
+
         games_layout.addWidget(chaos_btn)
         games_layout.addWidget(party_btn)
+        games_layout.addWidget(nuke_btn)
         body.addWidget(games_panel, 1)
         
         layout.addLayout(body)
@@ -125,15 +135,24 @@ class AdminAbusePage(QWidget):
         layout.addWidget(self.status_label)
 
     def global_abuse(self, action: str, amount: int = 0, message: str = "") -> None:
-        worker = Worker(api.safe_request, "post", "admin/abuse", json={"action": action, "amount": amount, "message": message})
-        worker.signals.finished.connect(lambda _: set_status(self.status_label, f"Abuse action '{action}' executed!", "#63D471"))
+        worker = Worker(api.admin_abuse, action, None, amount, message)
+        worker.signals.finished.connect(lambda payload: self._on_global_abuse_finished(action, payload))
         QThreadPool.globalInstance().start(worker)
+        set_status(self.status_label, f"Executing '{action}'...", "#F2C14E")
 
     def send_announcement(self) -> None:
         msg = self.announcement_input.text().strip()
         if not msg: return
         self.announcement_input.clear()
         self.global_abuse("global_announcement", message=msg)
+
+    def _on_global_abuse_finished(self, action: str, payload: dict) -> None:
+        if isinstance(payload, dict) and payload.get("status") == "success":
+            message = payload.get("message") or f"Abuse action '{action}' executed."
+            set_status(self.status_label, message, "#63D471")
+            return
+        message = payload.get("message", f"Abuse action '{action}' failed.") if isinstance(payload, dict) else "Admin abuse request failed."
+        set_status(self.status_label, message, "#F47C7C")
 
 
 def clear_layout(layout) -> None:
@@ -294,6 +313,7 @@ class AdminPanelPage(QWidget):
         super().__init__()
         self.main_window = main_window
         self.current_user_id: int | None = None
+        self._all_players: list[dict] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(34, 34, 34, 34)
@@ -329,7 +349,7 @@ class AdminPanelPage(QWidget):
         controls = QHBoxLayout()
         self.filter_input = QLineEdit()
         self.filter_input.setPlaceholderText("Filter by username, real name, or email")
-        self.filter_input.textChanged.connect(lambda _text: self.refresh_roster())
+        self.filter_input.textChanged.connect(lambda _text: self._render_roster(refresh_details=False))
         refresh_button = QPushButton("Refresh")
         refresh_button.setObjectName("secondaryButton")
         refresh_button.clicked.connect(lambda: self.refresh_roster(announce=True))
@@ -406,6 +426,38 @@ class AdminPanelPage(QWidget):
         self.give_creature_button.clicked.connect(self.give_creature_to_selected)
         user_layout.addWidget(self.give_creature_button)
 
+        abuse_label = QLabel("QUICK ABUSE")
+        abuse_label.setObjectName("sectionTitle")
+        user_layout.addWidget(abuse_label)
+        
+        abuse_grid = QGridLayout()
+        self.max_level_btn = QPushButton("Max Level")
+        self.max_level_btn.setStyleSheet("background: #63D471; color: white;")
+        self.max_level_btn.clicked.connect(lambda: self.player_abuse("max_level_creatures"))
+        
+        self.reset_inv_btn = QPushButton("Nuke Inv")
+        self.reset_inv_btn.setStyleSheet("background: #E14B4B; color: white;")
+        self.reset_inv_btn.clicked.connect(lambda: self.player_abuse("reset_creatures"))
+        
+        self.godly_set_btn = QPushButton("Godly Set")
+        self.godly_set_btn.setStyleSheet("background: #F2C14E; color: black;")
+        self.godly_set_btn.clicked.connect(lambda: self.player_abuse("give_godly_set"))
+        
+        self.chaos_mut_btn = QPushButton("Chaos Mut")
+        self.chaos_mut_btn.setStyleSheet("background: #7B57D1; color: white;")
+        self.chaos_mut_btn.clicked.connect(lambda: self.player_abuse("chaos_mutation"))
+        
+        self.reset_tokens_btn = QPushButton("Reset Tokens")
+        self.reset_tokens_btn.setStyleSheet("background: #E14B4B; color: white;")
+        self.reset_tokens_btn.clicked.connect(lambda: self.player_abuse("set_tokens", amount=0))
+        
+        abuse_grid.addWidget(self.max_level_btn, 0, 0)
+        abuse_grid.addWidget(self.reset_inv_btn, 0, 1)
+        abuse_grid.addWidget(self.godly_set_btn, 1, 0)
+        abuse_grid.addWidget(self.chaos_mut_btn, 1, 1)
+        abuse_grid.addWidget(self.reset_tokens_btn, 2, 0, 1, 2)
+        user_layout.addLayout(abuse_grid)
+
         inventory_panel = QFrame()
         inventory_panel.setObjectName("accentPanel")
         inventory_layout = QVBoxLayout(inventory_panel)
@@ -433,14 +485,16 @@ class AdminPanelPage(QWidget):
         QThreadPool.globalInstance().start(worker)
 
     def _on_roster_fetched(self, raw_users: list[dict], announce: bool) -> None:
-        players = []
+        self._all_players = self._normalize_players(raw_users)
+        self._render_roster(announce=announce)
+
+    def _normalize_players(self, raw_users: list[dict]) -> list[dict]:
+        players: list[dict] = []
         for user in raw_users:
             if not isinstance(user, dict) or user.get("username") is None:
                 continue
-            
-            # Unify ID across server versions
+
             uid = user.get("id") or user.get("username")
-            
             players.append({
                 "id": uid,
                 "username": user.get("username"),
@@ -451,6 +505,10 @@ class AdminPanelPage(QWidget):
                 "is_banned": bool(user.get("is_banned", False)),
                 "creature_count": int(user.get("creature_count", 0)),
             })
+        return players
+
+    def _filtered_players(self) -> list[dict]:
+        players = list(self._all_players)
 
         query = self.filter_input.text().strip().lower()
         if query:
@@ -461,6 +519,23 @@ class AdminPanelPage(QWidget):
                 or query in player["real_name"].lower()
                 or query in player["email"].lower()
             ]
+        return players
+
+    def _find_player(self, players: list[dict], identifier: int | str | None) -> dict | None:
+        if identifier is None:
+            return None
+        for player in players:
+            if player.get("id") == identifier:
+                return player
+        identifier_text = str(identifier).strip().lower()
+        for player in players:
+            username = str(player.get("username", "")).strip().lower()
+            if username == identifier_text:
+                return player
+        return None
+
+    def _render_roster(self, announce: bool = False, refresh_details: bool = True) -> None:
+        players = self._filtered_players()
 
         online_count = sum(1 for player in players if player["is_online"])
         self.roster_summary.setText(
@@ -479,9 +554,10 @@ class AdminPanelPage(QWidget):
             set_status(self.status_label, "No matching players to display.", "#F2C14E")
             return
 
-        current_ids = {player["id"] for player in players}
-        if self.current_user_id not in current_ids:
+        selected_player = self._find_player(players, self.current_user_id)
+        if selected_player is None:
             self.current_user_id = players[0]["id"]
+            selected_player = players[0]
 
         for player in players:
             card = AdminPlayerCard(
@@ -495,26 +571,33 @@ class AdminPanelPage(QWidget):
             )
             self.roster_list_layout.addWidget(card)
         self.roster_list_layout.addStretch(1)
-        self.refresh_current_user(silent=True)
+        if selected_player is not None and refresh_details:
+            self._render_user(selected_player)
         if announce:
             set_status(self.status_label, "Player roster refreshed.", "#63D471")
 
     def kick_user(self, user_id: int) -> None:
         worker = Worker(api.kick_user, user_id)
-        worker.signals.finished.connect(lambda success: self.refresh_roster())
+        worker.signals.finished.connect(lambda success: self._on_simple_admin_action(success, "Player kicked.", "Could not kick player."))
         QThreadPool.globalInstance().start(worker)
         set_status(self.status_label, f"Kicking user {user_id}...", "#F2C14E")
 
     def toggle_ban(self, user_id: int, should_ban: bool) -> None:
         worker = Worker(api.ban_user, user_id, should_ban)
-        worker.signals.finished.connect(lambda success: self.refresh_roster())
+        worker.signals.finished.connect(
+            lambda success: self._on_simple_admin_action(
+                success,
+                "Player banned." if should_ban else "Player unbanned.",
+                "Could not update ban status.",
+            )
+        )
         QThreadPool.globalInstance().start(worker)
         action = "Banning" if should_ban else "Unbanning"
         set_status(self.status_label, f"{action} user {user_id}...", "#E14B4B")
 
     def select_user(self, user_id: int) -> None:
         self.current_user_id = user_id
-        self.refresh_roster()
+        self._render_roster(refresh_details=True)
         set_status(self.status_label, "Player selected.", "#63D471")
 
     def refresh_current_user(self, silent: bool = False) -> None:
@@ -529,32 +612,18 @@ class AdminPanelPage(QWidget):
         if self.current_user_id is None:
             self._clear_user_display()
             return
-        
-        username = str(self.current_user_id)
-        user_meta = next(
-            (
-                user
-                for user in raw_users
-                if isinstance(user, dict) and str(user.get("username")).lower() == username.lower()
-            ),
-            None,
-        )
+
+        players = self._normalize_players(raw_users)
+        user_meta = self._find_player(players, self.current_user_id)
         if user_meta is None:
             self.current_user_id = None
             self._clear_user_display()
             set_status(self.status_label, "That player no longer exists.", "#F47C7C")
             return
 
-        user = {
-            "id": user_meta.get("id") or user_meta.get("username"),
-            "username": user_meta.get("username"),
-            "real_name": user_meta.get("real_name") or "",
-            "email": user_meta.get("email") or "",
-            "tokens": int(user_meta.get("tokens", 0) or 0),
-            "is_online": bool(user_meta.get("online", False)),
-            "creature_count": 0,
-        }
-        self._render_user(user)
+        self._all_players = players
+        self.current_user_id = user_meta["id"]
+        self._render_user(user_meta)
         if not silent:
             set_status(self.status_label, "Player details updated.", "#63D471")
 
@@ -571,10 +640,13 @@ class AdminPanelPage(QWidget):
 
     def _render_user(self, user: dict) -> None:
         online = bool(user.get("is_online", False))
+        banned = bool(user.get("is_banned", False))
         self.username_label.setText(f"Username: {user.get('username', '-')}")
-        self.presence_label.setText(f"Status: {'Online' if online else 'Offline'}")
+        status_text = "Banned" if banned else ("Online" if online else "Offline")
+        status_color = "#E14B4B" if banned else ("#63D471" if online else "#F2C14E")
+        self.presence_label.setText(f"Status: {status_text}")
         self.presence_label.setStyleSheet(
-            f"color: {'#63D471' if online else '#F2C14E'}; font-weight: 700;"
+            f"color: {status_color}; font-weight: 700;"
         )
         self.real_name_label.setText(f"Real Name: {user.get('real_name', '-')}")
         self.email_label.setText(f"Email: {user.get('email', '-')}")
@@ -587,6 +659,18 @@ class AdminPanelPage(QWidget):
         self.detail_add_one_button.setEnabled(enabled)
         self.detail_add_ten_button.setEnabled(enabled)
         self.give_creature_button.setEnabled(enabled)
+        self.max_level_btn.setEnabled(enabled)
+        self.reset_inv_btn.setEnabled(enabled)
+        self.godly_set_btn.setEnabled(enabled)
+        self.chaos_mut_btn.setEnabled(enabled)
+        self.reset_tokens_btn.setEnabled(enabled)
+
+    def player_abuse(self, action: str, amount: int = 0) -> None:
+        if self.current_user_id is None: return
+        worker = Worker(api.admin_abuse, action, self.current_user_id, amount, "")
+        worker.signals.finished.connect(lambda payload: self._on_player_abuse_finished(action, payload))
+        QThreadPool.globalInstance().start(worker)
+        set_status(self.status_label, f"Executing '{action}' on user...", "#F2C14E")
 
     def adjust_selected_tokens(self, delta: int) -> None:
         if self.current_user_id is None:
@@ -595,7 +679,13 @@ class AdminPanelPage(QWidget):
 
     def adjust_tokens(self, user_id: int | str, delta: int) -> None:
         worker = Worker(api.add_tokens, user_id, delta)
-        worker.signals.finished.connect(lambda success: self.refresh_roster())
+        worker.signals.finished.connect(
+            lambda success: self._on_simple_admin_action(
+                success,
+                "Token balance updated.",
+                "Could not update tokens.",
+            )
+        )
         QThreadPool.globalInstance().start(worker)
         set_status(self.status_label, f"Adjusting tokens for user {user_id}...", "#F2C14E")
 
@@ -646,11 +736,7 @@ class AdminPanelPage(QWidget):
             creature_name = selected_text.split(" (")[0]
             level = level_input.value()
             
-            worker = Worker(api.safe_request, "post", "admin/give_creature", json={
-                "user_id": self.current_user_id,
-                "creature_name": creature_name,
-                "level": level
-            })
+            worker = Worker(api.admin_give_creature, self.current_user_id, creature_name, level)
             worker.signals.finished.connect(self._on_creature_given)
             QThreadPool.globalInstance().start(worker)
             set_status(self.status_label, f"Giving {creature_name} to user...", "#F2C14E")
@@ -662,6 +748,24 @@ class AdminPanelPage(QWidget):
         else:
             msg = res.get("message", "Failed to give creature.") if isinstance(res, dict) else "Error"
             set_status(self.status_label, msg, "#F47C7C")
+
+    def _on_simple_admin_action(self, success: bool, success_message: str, error_message: str) -> None:
+        if success:
+            self.refresh_roster()
+            self.refresh_current_user(silent=True)
+            set_status(self.status_label, success_message, "#63D471")
+            return
+        set_status(self.status_label, error_message, "#F47C7C")
+
+    def _on_player_abuse_finished(self, action: str, payload: dict) -> None:
+        if isinstance(payload, dict) and payload.get("status") == "success":
+            self.refresh_roster()
+            self.refresh_current_user(silent=True)
+            message = payload.get("message") or f"Executed '{action}'."
+            set_status(self.status_label, message, "#63D471")
+            return
+        message = payload.get("message", f"Could not execute '{action}'.") if isinstance(payload, dict) else "Admin abuse request failed."
+        set_status(self.status_label, message, "#F47C7C")
 
 
 class AdminWindow(QMainWindow):

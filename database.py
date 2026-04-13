@@ -83,6 +83,24 @@ def _create_schema(connection: sqlite3.Connection) -> None:
     if "last_daily_claim" not in user_columns:
         connection.execute("ALTER TABLE users ADD COLUMN last_daily_claim TEXT")
 
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS owned_creatures (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            creature_key TEXT NOT NULL,
+            creature_name TEXT NOT NULL,
+            rarity TEXT NOT NULL,
+            image_path TEXT NOT NULL,
+            level INTEGER NOT NULL DEFAULT 1 CHECK(level >= 1),
+            xp INTEGER NOT NULL DEFAULT 0 CHECK(xp >= 0),
+            value_roll REAL NOT NULL,
+            mutation TEXT NOT NULL DEFAULT 'None',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+
     # Migration for owned_creatures mutation
     creature_columns = {row["name"] for row in connection.execute("PRAGMA table_info(owned_creatures)").fetchall()}
     if "mutation" not in creature_columns:
@@ -175,20 +193,6 @@ def _create_schema(connection: sqlite3.Connection) -> None:
 
     connection.executescript(
         """
-        CREATE TABLE IF NOT EXISTS owned_creatures (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            creature_key TEXT NOT NULL,
-            creature_name TEXT NOT NULL,
-            rarity TEXT NOT NULL,
-            image_path TEXT NOT NULL,
-            level INTEGER NOT NULL DEFAULT 1 CHECK(level >= 1),
-            xp INTEGER NOT NULL DEFAULT 0 CHECK(xp >= 0),
-        value_roll REAL NOT NULL,
-        mutation TEXT NOT NULL DEFAULT 'None',
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
-
         CREATE TABLE IF NOT EXISTS trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             initiator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -37,6 +37,7 @@ class HeartbeatWorker(QObject):
     """
     kicked = pyqtSignal()
     banned = pyqtSignal()
+    status_updated = pyqtSignal(dict) # FIX: Signal for instant synchronization
 
     def __init__(self, username: str, session_token: str | None = None):
         super().__init__()
@@ -51,7 +52,7 @@ class HeartbeatWorker(QObject):
         if not self._is_running:
             debug_log("[DEBUG] Starting heartbeat worker.")
             self._is_running = True
-            self._timer.start(15000)  # 15 seconds
+            self._timer.start(10000)
             self.send_heartbeat() # Send a heartbeat immediately
 
     def stop(self):
@@ -67,6 +68,7 @@ class HeartbeatWorker(QObject):
         def heartbeat_thread():
             self._request_in_flight = True
             try:
+                from network import safe_json
                 response = safe_request("post", "heartbeat", json={
                     "username": self._username,
                     "session_token": self._session_token
@@ -77,8 +79,12 @@ class HeartbeatWorker(QObject):
                 elif response.status_code == 403:
                     debug_log("[DEBUG] Heartbeat returned 403, user banned.")
                     self.banned.emit()
+                elif response.status_code == 200:
+                    payload = safe_json(response)
+                    if isinstance(payload, dict) and payload.get("status") == "ok":
+                        self.status_updated.emit(payload)
             except Exception as e:
-                print(f"[ERROR] Heartbeat failed: {e}")
+                debug_log(f"[ERROR] Heartbeat failed: {e}")
             finally:
                 self._request_in_flight = False
 
