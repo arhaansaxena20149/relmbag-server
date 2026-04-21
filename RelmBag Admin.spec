@@ -2,7 +2,7 @@
 
 APP_NAME = "RelmBag Admin"
 APP_ID = "com.relmbag.admin"
-APP_VERSION = "1.3"
+APP_VERSION = "1.8"
 
 a = Analysis(
     ["admin.py"],
