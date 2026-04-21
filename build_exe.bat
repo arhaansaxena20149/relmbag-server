@@ -1,16 +1,16 @@
 @echo off
 REM RelmBag Windows EXE Build Script
-REM Version: 1.3
+REM Version: 1.4
 
-set VERSION=1.3
+set VERSION=1.4
 set ICON=assets\icons\pebblit.ico
 
 echo ------------------------------------------------
 echo Building RelmBag Player v%VERSION%...
 echo ------------------------------------------------
 
-REM Build Player EXE
-py -m PyInstaller --noconfirm --clean --windowed --onefile --name "RelmBag Player" --add-data="assets;assets" -i %ICON% game.py
+REM Build Player EXE using the Windows spec file
+py -m PyInstaller --noconfirm --clean "RelmBag Player Windows.spec"
 
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] PyInstaller failed for Player app
@@ -22,8 +22,8 @@ echo ------------------------------------------------
 echo Building RelmBag Admin v%VERSION%...
 echo ------------------------------------------------
 
-REM Build Admin EXE
-py -m PyInstaller --noconfirm --clean --windowed --onefile --name "RelmBag Admin" --add-data="assets;assets" -i %ICON% admin.py
+REM Build Admin EXE using the Windows spec file
+py -m PyInstaller --noconfirm --clean "RelmBag Admin Windows.spec"
 
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] PyInstaller failed for Admin app
