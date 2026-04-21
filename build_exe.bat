@@ -19,8 +19,14 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo Using Python: %PYTHON_CMD%
 echo ------------------------------------------------
+echo Installing pip for Python...
+echo ------------------------------------------------
+%PYTHON_CMD% -m ensurepip --upgrade
+
+echo ------------------------------------------------
 echo Verifying Dependencies...
 echo ------------------------------------------------
+%PYTHON_CMD% -m pip install --upgrade pip
 %PYTHON_CMD% -m pip install PyQt5 Pillow requests bcrypt flask PyInstaller
 
 echo ------------------------------------------------
