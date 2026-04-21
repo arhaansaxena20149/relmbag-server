@@ -1,6 +1,6 @@
 @echo off
 REM RelmBag Windows EXE Build Script
-REM Version: 1.2
+REM Version: 1.3
 
 set VERSION=1.3
 set ICON=assets\icons\pebblit.ico

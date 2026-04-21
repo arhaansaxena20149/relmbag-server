@@ -1,18 +1,18 @@
 #!/bin/bash
 
 # RelmBag DMG Build Script
-# Version: 1.2
+# Version: 1.3
 
 VERSION="1.3"
 ICON="assets/icons/pebblit.icns"
 
-# Ensure create-dmg and pyinstaller are available
-if ! command -v create-dmg &> /dev/null; then
-    echo "[ERROR] create-dmg not found. Install with: brew install create-dmg"
+# Ensure npx/create-dmg and PyInstaller are available
+if ! command -v npx &> /dev/null; then
+    echo "[ERROR] npx not found. Install Node.js/npm first."
     exit 1
 fi
 
-if ! command -v pyinstaller &> /dev/null; then
+if ! python3 -m PyInstaller --version &> /dev/null; then
     echo "[ERROR] pyinstaller not found. Install with: pip install pyinstaller"
     exit 1
 fi
