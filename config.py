@@ -46,7 +46,7 @@ APP_ICON_ICO = ICONS_DIR / "pebblit.ico"
 
 APP_TITLE = "RelmBag Arena"
 APP_SUBTITLE = "Creature Crates, Trading, and Tactical Battles"
-APP_VERSION = "1.2"
+APP_VERSION = "1.3"
 
 CRATE_COST = 10
 MUTATION_COST = 100
@@ -136,11 +136,12 @@ MUTATION_COLORS = {
 }
 
 GAME_REWARDS = {
-    "RelmFishing": 5, # per catch
-    "RelmSlayer": 10, # per boss defeat
-    "MemoryMatch": 15, # per win
-    "RelmRunner": 8, # per successful sprint
-    "TokenCatcher": 12, # per 20 tokens caught
+    "RelmFishing": 8,
+    "RelmSlayer": 12,
+    "MemoryMatch": 15,
+    "RelmRunner": 10,
+    "TokenCatcher": 12,
+    "RuneQuiz": 20,
 }
 
 RARITY_STAT_MULTIPLIERS = {

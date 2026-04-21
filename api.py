@@ -285,6 +285,42 @@ def admin_give_creature(user_id: int | str, creature_name: str, level: int = 1) 
         print(f"[ERROR] Failed to give creature '{creature_name}' to user {user_id}: {e}")
         return {}
 
+def start_minigame(user_id: int | str, session_token: str | None, game_name: str) -> dict:
+    try:
+        response = safe_request("post", "games/start", json={
+            "user_id": user_id,
+            "session_token": session_token,
+            "game_name": game_name,
+        })
+        return safe_json(response) or {}
+    except Exception as e:
+        print(f"[ERROR] Failed to start minigame '{game_name}': {e}")
+        return {}
+
+def finish_minigame(
+    user_id: int | str,
+    session_token: str | None,
+    session_id: str,
+    score: int = 0,
+    elapsed_ms: int = 0,
+    answers: list[int] | None = None,
+) -> dict:
+    try:
+        payload = {
+            "user_id": user_id,
+            "session_token": session_token,
+            "session_id": session_id,
+            "score": score,
+            "elapsed_ms": elapsed_ms,
+        }
+        if answers is not None:
+            payload["answers"] = answers
+        response = safe_request("post", "games/finish", json=payload)
+        return safe_json(response) or {}
+    except Exception as e:
+        print(f"[ERROR] Failed to finish minigame session '{session_id}': {e}")
+        return {}
+
 def reset_password(user_id: int | str, new_password: str) -> bool:
     try:
         # Fallback to ensure we have a valid identifier

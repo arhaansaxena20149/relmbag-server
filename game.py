@@ -1,8 +1,9 @@
 from __future__ import annotations
 import sys
+import time
 from functools import partial
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThreadPool
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QCursor, QIcon
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -1138,7 +1139,9 @@ class CratePage(BasePage):
         selected_auto_sell = set(self.auto_sell_rarities)
 
         def _open_and_maybe_sell(username: str, sell_rarities: set[str]) -> dict:
-            result = crate_system.open_crate(username)
+            result = api.request_json("post", "open_crate", json={"username": username}) or {}
+            if result.get("status") != "success":
+                raise ValueError(result.get("message", "Failed to open crate."))
             creature = result.get("creature", {})
             creature_id = creature.get("id")
             if creature.get("rarity") in sell_rarities and creature_id is not None:
@@ -1147,6 +1150,7 @@ class CratePage(BasePage):
                     refund = int(sell_result.get("refund", 0) or 0)
                     result["auto_sold"] = True
                     result["sell_refund"] = refund
+                    # remaining_tokens from sell_result is correct
                     updated_tokens = sell_result.get("remaining_tokens")
                     if updated_tokens is None:
                         updated_tokens = int(result.get("remaining_tokens", 0) or 0) + refund
@@ -1424,22 +1428,28 @@ class InventoryPage(BasePage):
         if confirm != QMessageBox.Yes:
             return
             
-        worker = Worker(api.safe_request, "post", "mutate", json={
+        worker = Worker(api.request_json, "post", "mutate", json={
             "user_id": user["id"],
             "creature_id": self.selected_creature_id
         })
         worker.signals.finished.connect(self._on_mutation_result)
         QThreadPool.globalInstance().start(worker)
 
-    def _on_mutation_result(self, response) -> None:
-        data = safe_json(response)
-        if data.get("status") == "success":
-            mutation = data.get("mutation", "None")
-            QMessageBox.information(self, "Mutation Success!", f"Your creature has evolved! Mutation: {mutation}")
-            self.game_window.refresh_session_data()
-            self.refresh_page()
-        else:
-            show_error(self, data.get("message", "Mutation failed."))
+    def _on_mutation_result(self, data) -> None:
+        try:
+            if not self.isVisible(): return
+            if not isinstance(data, dict):
+                show_error(self, "Invalid response from server.")
+                return
+            if data.get("status") == "success":
+                mutation = data.get("mutation", "None")
+                QMessageBox.information(self, "Mutation Success!", f"Your creature has evolved! Mutation: {mutation}")
+                self.game_window.refresh_session_data()
+                self.refresh_page()
+            else:
+                show_error(self, data.get("message", "Mutation failed."))
+        except RuntimeError:
+            pass
 
     def sell_selected_creature(self) -> None:
         creature = self.current_creatures.get(self.selected_creature_id)
@@ -2874,6 +2884,28 @@ class GamesPage(BasePage):
         slayer_layout.addWidget(self.slayer_game_btn, 0, Qt.AlignCenter)
         slayer_layout.addStretch()
         body.addWidget(slayer_panel, 1)
+
+        # Rune Quiz Rush
+        quiz_panel = QFrame()
+        quiz_panel.setObjectName("panel")
+        apply_shadow(quiz_panel, blur=30, y_offset=10)
+        quiz_layout = QVBoxLayout(quiz_panel)
+        quiz_title = QLabel("Rune Quiz Rush")
+        quiz_title.setObjectName("sectionTitle")
+        quiz_desc = QLabel("Answer server-generated quiz rounds for verified rewards. Blooket-style, but RelmBag themed.")
+        quiz_desc.setWordWrap(True)
+        quiz_desc.setStyleSheet("color: #A67B5B;")
+
+        self.quiz_game_btn = QPushButton("START QUIZ")
+        self.quiz_game_btn.setObjectName("successButton")
+        self.quiz_game_btn.clicked.connect(self.start_quiz_game)
+
+        quiz_layout.addWidget(quiz_title)
+        quiz_layout.addWidget(quiz_desc)
+        quiz_layout.addStretch()
+        quiz_layout.addWidget(self.quiz_game_btn, 0, Qt.AlignCenter)
+        quiz_layout.addStretch()
+        body.addWidget(quiz_panel, 1)
         layout.addLayout(body)
 
         body2 = QHBoxLayout()
@@ -2949,41 +2981,187 @@ class GamesPage(BasePage):
         layout.addStretch(1)
         self.status_label = QLabel()
         layout.addWidget(self.status_label)
+        self._game_in_flight = False
+        self.game_buttons = [
+            self.fishing_game_btn,
+            self.slayer_game_btn,
+            self.quiz_game_btn,
+            self.memory_game_btn,
+            self.runner_game_btn,
+            self.catcher_game_btn,
+        ]
 
     def start_fishing_game(self) -> None:
-        dialog = FishingGameDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
-            self.award_token("RelmFishing", 5)
+        self.start_server_game("RelmFishing", FishingGameDialog)
 
     def start_slayer_game(self) -> None:
-        dialog = SlayerGameDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
-            self.award_token("RelmSlayer", 10)
+        self.start_server_game("RelmSlayer", SlayerGameDialog)
+
+    def start_quiz_game(self) -> None:
+        self.start_server_game("RuneQuiz", QuizRushDialog)
 
     def start_memory_game(self) -> None:
-        dialog = MemoryGameDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
-            self.award_token("MemoryMatch", 15)
+        self.start_server_game("MemoryMatch", MemoryGameDialog)
 
     def start_runner_game(self) -> None:
-        dialog = RunnerGameDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
-            self.award_token("RelmRunner", 8)
+        self.start_server_game("RelmRunner", RunnerGameDialog)
 
     def start_catcher_game(self) -> None:
-        dialog = CatcherGameDialog(self)
-        if dialog.exec_() == QDialog.Accepted:
-            self.award_token("TokenCatcher", 12)
+        self.start_server_game("TokenCatcher", CatcherGameDialog)
 
-    def award_token(self, game_name: str, amount: int) -> None:
-        worker = Worker(api.safe_request, "post", "games/reward", json={
-            "user_id": self.game_window.current_user["id"],
-            "game_name": game_name,
-            "amount": amount
-        })
-        worker.signals.finished.connect(lambda _: self.game_window.refresh_session_data())
+    def _set_game_buttons_enabled(self, enabled: bool) -> None:
+        for button in self.game_buttons:
+            button.setEnabled(enabled)
+
+    def start_server_game(self, game_name: str, dialog_cls) -> None:
+        user = self.game_window.current_user
+        if self._game_in_flight:
+            set_status(self.status_label, "Finish the current minigame first.", "#F2C14E")
+            return
+        if not user:
+            show_error(self, "Please log in before playing minigames.")
+            return
+
+        self._game_in_flight = True
+        self._set_game_buttons_enabled(False)
+        set_status(self.status_label, f"Starting verified {game_name} session...", "#F2C14E")
+        worker = Worker(api.start_minigame, user["id"], user.get("session_token"), game_name)
+        worker.signals.finished.connect(
+            lambda payload, name=game_name, cls=dialog_cls: self._on_game_session_started(name, cls, payload)
+        )
+        worker.signals.error.connect(lambda e: self._on_game_error(str(e)))
         QThreadPool.globalInstance().start(worker)
-        set_status(self.status_label, f"Well played! You earned {amount} tokens.", "#63D471")
+
+    def _on_game_session_started(self, game_name: str, dialog_cls, payload: dict) -> None:
+        if not isinstance(payload, dict) or payload.get("status") != "success":
+            message = payload.get("message", "Could not start minigame.") if isinstance(payload, dict) else "Could not start minigame."
+            self._on_game_error(message)
+            return
+
+        if dialog_cls is QuizRushDialog:
+            dialog = dialog_cls(self, payload.get("challenge", {}))
+        else:
+            dialog = dialog_cls(self)
+
+        if dialog.exec_() != QDialog.Accepted:
+            self._game_in_flight = False
+            self._set_game_buttons_enabled(True)
+            set_status(self.status_label, "Minigame cancelled. No reward was claimed.", "#AEBBD0")
+            return
+
+        result = dialog.result_payload()
+        set_status(self.status_label, "Verifying reward with the server...", "#F2C14E")
+        user = self.game_window.current_user
+        worker = Worker(
+            api.finish_minigame,
+            user["id"],
+            user.get("session_token"),
+            payload["session_id"],
+            int(result.get("score", 0) or 0),
+            int(result.get("elapsed_ms", 0) or 0),
+            result.get("answers"),
+        )
+        worker.signals.finished.connect(lambda reward_payload, name=game_name: self._on_game_finished(name, reward_payload))
+        worker.signals.error.connect(lambda e: self._on_game_error(str(e)))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_game_finished(self, game_name: str, payload: dict) -> None:
+        self._game_in_flight = False
+        self._set_game_buttons_enabled(True)
+        if not isinstance(payload, dict) or payload.get("status") != "success":
+            message = payload.get("message", "Reward verification failed.") if isinstance(payload, dict) else "Reward verification failed."
+            set_status(self.status_label, message, "#F47C7C")
+            return
+
+        reward = int(payload.get("reward", 0) or 0)
+        score = int(payload.get("score", 0) or 0)
+        current_tokens = payload.get("current_tokens")
+        if current_tokens is not None:
+            self.game_window.update_token_balance(int(current_tokens))
+        set_status(self.status_label, f"{game_name} verified! Score {score}. Earned {reward} tokens.", "#63D471")
+
+    def _on_game_error(self, message: str) -> None:
+        self._game_in_flight = False
+        self._set_game_buttons_enabled(True)
+        set_status(self.status_label, message or "Minigame failed.", "#F47C7C")
+
+
+class QuizRushDialog(QDialog):
+    def __init__(self, parent=None, challenge: dict | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Rune Quiz Rush")
+        self.resize(640, 520)
+        self.setStyleSheet(parent.window().styleSheet() if parent else "")
+        self.started_at = time.monotonic()
+        self.questions = list((challenge or {}).get("questions", []))
+        self.answers: list[int] = []
+        self.index = 0
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 28, 28, 28)
+        layout.setSpacing(16)
+
+        title = QLabel("RUNE QUIZ RUSH")
+        title.setObjectName("sectionTitle")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+
+        self.progress_label = QLabel()
+        self.progress_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.progress_label)
+
+        self.prompt_label = QLabel()
+        self.prompt_label.setWordWrap(True)
+        self.prompt_label.setAlignment(Qt.AlignCenter)
+        self.prompt_label.setStyleSheet("font-size: 20px; font-weight: 900; color: #F5EBD5;")
+        layout.addWidget(self.prompt_label)
+
+        self.option_buttons: list[QPushButton] = []
+        for idx in range(4):
+            button = QPushButton()
+            button.setObjectName("secondaryButton")
+            button.clicked.connect(partial(self.choose_answer, idx))
+            layout.addWidget(button)
+            self.option_buttons.append(button)
+
+        hint = QLabel("Questions are issued by the server, and rewards are verified after the round.")
+        hint.setWordWrap(True)
+        hint.setAlignment(Qt.AlignCenter)
+        hint.setStyleSheet("color: #AEBBD0;")
+        layout.addWidget(hint)
+
+        if not self.questions:
+            QTimer.singleShot(0, self.reject)
+        else:
+            self.render_question()
+
+    def render_question(self) -> None:
+        question = self.questions[self.index]
+        self.progress_label.setText(f"Question {self.index + 1} / {len(self.questions)}")
+        self.prompt_label.setText(question.get("prompt", "Choose the best answer."))
+        options = list(question.get("options", []))[:4]
+        for idx, button in enumerate(self.option_buttons):
+            if idx < len(options):
+                button.setText(options[idx])
+                button.setEnabled(True)
+                button.show()
+            else:
+                button.hide()
+
+    def choose_answer(self, option_index: int) -> None:
+        self.answers.append(option_index)
+        self.index += 1
+        if self.index >= len(self.questions):
+            self.accept()
+            return
+        self.render_question()
+
+    def result_payload(self) -> dict:
+        return {
+            "score": 0,
+            "answers": self.answers,
+            "elapsed_ms": int((time.monotonic() - self.started_at) * 1000),
+        }
 
 
 class FishingGameDialog(QDialog):
@@ -2991,7 +3169,9 @@ class FishingGameDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Relm Fishing")
         self.resize(300, 500)
-        self.setStyleSheet(parent.parent().styleSheet())
+        self.setStyleSheet(parent.window().styleSheet() if parent else "")
+        self.started_at = time.monotonic()
+        self.final_score = 0
         layout = QVBoxLayout(self)
         
         title = QLabel("RELM FISHING")
@@ -3083,7 +3263,14 @@ class FishingGameDialog(QDialog):
         
         if self.progress >= 100:
             self.timer.stop()
+            self.final_score = 100
             self.accept()
+
+    def result_payload(self) -> dict:
+        return {
+            "score": self.final_score,
+            "elapsed_ms": int((time.monotonic() - self.started_at) * 1000),
+        }
 
 
 class SlayerGameDialog(QDialog):
@@ -3091,7 +3278,8 @@ class SlayerGameDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Relm Slayer")
         self.resize(600, 600)
-        self.setStyleSheet(parent.parent().styleSheet())
+        self.setStyleSheet(parent.window().styleSheet() if parent else "")
+        self.started_at = time.monotonic()
         layout = QVBoxLayout(self)
         
         title = QLabel("RELM SLAYER")
@@ -3139,13 +3327,20 @@ class SlayerGameDialog(QDialog):
             self.timer.stop()
             self.accept()
 
+    def result_payload(self) -> dict:
+        return {
+            "score": self.score,
+            "elapsed_ms": int((time.monotonic() - self.started_at) * 1000),
+        }
+
 
 class MemoryGameDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Memory Match")
         self.resize(500, 600)
-        self.setStyleSheet(parent.parent().styleSheet())
+        self.setStyleSheet(parent.window().styleSheet() if parent else "")
+        self.started_at = time.monotonic()
         layout = QVBoxLayout(self)
         
         title = QLabel("MEMORY MATCH")
@@ -3205,13 +3400,20 @@ class MemoryGameDialog(QDialog):
         self.second_selection = None
         for b in self.buttons: b.setEnabled(True)
 
+    def result_payload(self) -> dict:
+        return {
+            "score": self.matches,
+            "elapsed_ms": int((time.monotonic() - self.started_at) * 1000),
+        }
+
 
 class RunnerGameDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Relm Runner")
         self.resize(600, 300)
-        self.setStyleSheet(parent.parent().styleSheet())
+        self.setStyleSheet(parent.window().styleSheet() if parent else "")
+        self.started_at = time.monotonic()
         layout = QVBoxLayout(self)
         
         title = QLabel("RELM RUNNER")
@@ -3289,13 +3491,20 @@ class RunnerGameDialog(QDialog):
             self.spawn_timer.stop()
             self.accept()
 
+    def result_payload(self) -> dict:
+        return {
+            "score": self.distance,
+            "elapsed_ms": int((time.monotonic() - self.started_at) * 1000),
+        }
+
 
 class CatcherGameDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Token Catcher")
         self.resize(400, 500)
-        self.setStyleSheet(parent.parent().styleSheet())
+        self.setStyleSheet(parent.window().styleSheet() if parent else "")
+        self.started_at = time.monotonic()
         layout = QVBoxLayout(self)
         
         title = QLabel("TOKEN CATCHER")
@@ -3361,6 +3570,12 @@ class CatcherGameDialog(QDialog):
             self.timer.stop()
             self.spawn_timer.stop()
             self.accept()
+
+    def result_payload(self) -> dict:
+        return {
+            "score": self.score,
+            "elapsed_ms": int((time.monotonic() - self.started_at) * 1000),
+        }
 
 
 class GameWindow(QMainWindow):

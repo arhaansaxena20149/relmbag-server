@@ -7,6 +7,7 @@ import random
 import time
 import os
 import uuid
+import secrets
 from config import (
     ADMIN_PASSWORD,
     ADMIN_USERNAME,
@@ -51,6 +52,55 @@ GLOBAL_ANNOUNCEMENT = {
     "message": "",
     "timestamp": 0
 }
+
+MINIGAME_RULES = {
+    "RelmFishing": {"reward": 8, "target": 100, "min_ms": 7000, "max_ms": 120000, "score_cap": 100},
+    "RelmSlayer": {"reward": 12, "target": 20, "min_ms": 9000, "max_ms": 120000, "score_cap": 20},
+    "MemoryMatch": {"reward": 15, "target": 8, "min_ms": 5000, "max_ms": 180000, "score_cap": 8},
+    "RelmRunner": {"reward": 10, "target": 1000, "min_ms": 7000, "max_ms": 120000, "score_cap": 1000},
+    "TokenCatcher": {"reward": 12, "target": 20, "min_ms": 9000, "max_ms": 120000, "score_cap": 20},
+    "RuneQuiz": {"reward_per_correct": 4, "question_count": 5, "min_ms": 4500, "max_ms": 180000, "score_cap": 5},
+}
+
+RUNE_QUIZ_BANK = [
+    {
+        "prompt": "Which rarity is harder to pull than Mythic?",
+        "options": ["Rare", "Celestial", "Uncommon", "Epic"],
+        "answer": 1,
+    },
+    {
+        "prompt": "What do tokens let you do in RelmBag?",
+        "options": ["Open crates", "Rename Git commits", "Lower levels", "Delete accounts"],
+        "answer": 0,
+    },
+    {
+        "prompt": "Which action should happen after winning a minigame?",
+        "options": ["Client chooses any reward", "Server verifies the session", "Nothing happens", "Admin panel opens"],
+        "answer": 1,
+    },
+    {
+        "prompt": "What is the safest trade rule?",
+        "options": ["Confirm before finalizing", "Trust screenshots", "Ignore values", "Trade while offline"],
+        "answer": 0,
+    },
+    {
+        "prompt": "What does a creature's level improve?",
+        "options": ["Only its icon", "Battle strength", "Your password", "The app version"],
+        "answer": 1,
+    },
+    {
+        "prompt": "Which mode is built for creature battles?",
+        "options": ["Trading Hall", "Battle Arena", "Login", "Settings"],
+        "answer": 1,
+    },
+    {
+        "prompt": "What should happen to old minigame reward requests?",
+        "options": ["Trust them", "Require v1.3 sessions", "Give infinite tokens", "Crash the game"],
+        "answer": 1,
+    },
+]
+
+ACTIVE_GAME_SESSIONS: dict[str, dict] = {}
 
 # --------------------------
 # DATABASE
@@ -413,11 +463,12 @@ def sell_creature():
 
         # Remove creature and add tokens
         database.delete_creature(creature["id"])
-        database.adjust_user_tokens(user["id"], refund)
-        remaining_tokens = int(user["tokens"]) + refund
-
+        
+        # FIX: Ensure accurate token counting by fetching fresh balance after adjustment
+        current_tokens = database.adjust_user_tokens(user["id"], refund)
+        
         logger.info(f"User {user['username']} sold creature {creature['creature_name']} for {refund} tokens")
-        return jsonify({"status": "success", "refund": refund, "remaining_tokens": remaining_tokens, "current_tokens": remaining_tokens})
+        return jsonify({"status": "success", "refund": refund, "remaining_tokens": current_tokens, "current_tokens": current_tokens})
     except Exception as e:
         logger.error(f"Sell creature failed: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
@@ -931,28 +982,133 @@ def mutate_creature():
         logger.error(f"Mutation failed: {e}")
         return jsonify({"status": "error", "message": str(e)}), 500
 
+def _clean_game_sessions() -> None:
+    now = time.time()
+    expired = [
+        session_id
+        for session_id, session in ACTIVE_GAME_SESSIONS.items()
+        if session.get("used") or now - float(session.get("created_at", 0)) > 240
+    ]
+    for session_id in expired:
+        ACTIVE_GAME_SESSIONS.pop(session_id, None)
+
+
+def _validate_game_user(user_id, session_token: str | None):
+    user = resolve_user(user_id)
+    if not user:
+        return None, ("Player not found.", 404)
+    if user.get("is_banned"):
+        return None, ("This account is banned.", 403)
+    server_token = user.get("session_token")
+    if server_token and session_token != server_token:
+        return None, ("Session expired. Please log in again.", 401)
+    return user, None
+
+
+@app.route("/games/start", methods=["POST"])
+def start_minigame():
+    data = request.json or {}
+    game_name = str(data.get("game_name", "") or "").strip()
+    user, error = _validate_game_user(data.get("user_id"), data.get("session_token"))
+    if error:
+        message, status = error
+        return jsonify({"status": "error", "message": message}), status
+    if game_name not in MINIGAME_RULES:
+        return jsonify({"status": "error", "message": "Unknown minigame."}), 400
+
+    _clean_game_sessions()
+    rules = dict(MINIGAME_RULES[game_name])
+    session_id = secrets.token_urlsafe(24)
+    session = {
+        "user_id": int(user["id"]),
+        "game_name": game_name,
+        "created_at": time.time(),
+        "used": False,
+    }
+
+    challenge = {}
+    if game_name == "RuneQuiz":
+        questions = random.sample(RUNE_QUIZ_BANK, rules["question_count"])
+        session["answers"] = [q["answer"] for q in questions]
+        challenge["questions"] = [
+            {"prompt": q["prompt"], "options": q["options"]}
+            for q in questions
+        ]
+
+    ACTIVE_GAME_SESSIONS[session_id] = session
+    return jsonify({
+        "status": "success",
+        "session_id": session_id,
+        "game_name": game_name,
+        "rules": rules,
+        "challenge": challenge,
+    })
+
+
+@app.route("/games/finish", methods=["POST"])
+def finish_minigame():
+    data = request.json or {}
+    session_id = str(data.get("session_id", "") or "").strip()
+    user, error = _validate_game_user(data.get("user_id"), data.get("session_token"))
+    if error:
+        message, status = error
+        return jsonify({"status": "error", "message": message}), status
+
+    _clean_game_sessions()
+    session = ACTIVE_GAME_SESSIONS.get(session_id)
+    if not session or session.get("used"):
+        return jsonify({"status": "error", "message": "Game session expired. Start a new game."}), 400
+    if int(session["user_id"]) != int(user["id"]):
+        return jsonify({"status": "error", "message": "Game session belongs to another player."}), 403
+
+    game_name = session["game_name"]
+    rules = MINIGAME_RULES[game_name]
+    server_elapsed_ms = int((time.time() - float(session["created_at"])) * 1000)
+    client_elapsed_ms = max(0, _coerce_int(data.get("elapsed_ms", 0), 0))
+    elapsed_ms = max(server_elapsed_ms, client_elapsed_ms)
+
+    if elapsed_ms < int(rules["min_ms"]):
+        logger.warning("Rejected suspiciously fast minigame finish: %s user=%s elapsed=%sms", game_name, user["id"], elapsed_ms)
+        return jsonify({"status": "error", "message": "That game ended too quickly to count."}), 400
+    if elapsed_ms > int(rules["max_ms"]):
+        return jsonify({"status": "error", "message": "That game session timed out."}), 400
+
+    reward = 0
+    score = 0
+    if game_name == "RuneQuiz":
+        answers = data.get("answers", [])
+        if not isinstance(answers, list):
+            answers = []
+        correct_answers = session.get("answers", [])
+        score = sum(
+            1 for expected, actual in zip(correct_answers, answers)
+            if _coerce_int(actual, -1) == expected
+        )
+        reward = min(score, int(rules["score_cap"])) * int(rules["reward_per_correct"])
+    else:
+        score = min(max(0, _coerce_int(data.get("score", 0), 0)), int(rules["score_cap"]))
+        if score < int(rules["target"]):
+            return jsonify({"status": "error", "message": "Game was not completed."}), 400
+        reward = int(rules["reward"])
+
+    session["used"] = True
+    current_tokens = database.adjust_user_tokens(user["id"], reward)
+    logger.info("Minigame reward: user=%s game=%s score=%s reward=%s", user["id"], game_name, score, reward)
+    return jsonify({
+        "status": "success",
+        "game_name": game_name,
+        "score": score,
+        "reward": reward,
+        "current_tokens": current_tokens,
+    })
+
+
 @app.route("/games/reward", methods=["POST"])
 def game_reward():
-    data = request.json or {}
-    user_id = data.get("user_id")
-    game_name = data.get("game_name")
-    reward_amount = data.get("amount", 0)
-    
-    if not user_id or not game_name:
-        return jsonify({"status": "error"}), 400
-        
-    try:
-        # Basic security check for rewards
-        max_reward = 100
-        if reward_amount > max_reward:
-            logger.warning(f"User {user_id} attempted suspicious reward: {reward_amount}")
-            return jsonify({"status": "error", "message": "Invalid reward"}), 400
-            
-        with transaction() as conn:
-            conn.execute("UPDATE users SET tokens = tokens + ? WHERE id = ?", (reward_amount, user_id))
-        return jsonify({"status": "success"})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+    return jsonify({
+        "status": "error",
+        "message": "Direct minigame rewards are disabled in v1.3. Please update the app.",
+    }), 410
 
 @app.route("/admin/abuse", methods=["POST"])
 def admin_abuse():

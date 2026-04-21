@@ -2,7 +2,7 @@
 
 APP_NAME = "RelmBag Player"
 APP_ID = "com.relmbag.player"
-APP_VERSION = "1.2"
+APP_VERSION = "1.3"
 
 a = Analysis(
     ["game.py"],

@@ -595,8 +595,7 @@ def load_pixmap(image_path: str, size: int) -> QPixmap:
         painter.end()
         _PIXMAP_CACHE[cache_key] = placeholder
         return placeholder
-    transformation_mode = Qt.FastTransformation if UI_EFFECTS_DISABLED else Qt.SmoothTransformation
-    scaled = pixmap.scaled(size, size, Qt.KeepAspectRatio, transformation_mode)
+    scaled = pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     _PIXMAP_CACHE[cache_key] = scaled
     return scaled
 
