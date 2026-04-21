@@ -5,10 +5,23 @@ APP_VERSION = "1.3"
 
 a = Analysis(
     ["admin.py"],
-    pathex=[],
+    pathex=["."],
     binaries=[],
     datas=[("assets", "assets")],
-    hiddenimports=["PIL", "requests", "bcrypt", "flask"],
+    hiddenimports=[
+        "PIL", 
+        "requests", 
+        "bcrypt", 
+        "flask", 
+        "PyQt5", 
+        "PyQt5.QtCore", 
+        "PyQt5.QtGui", 
+        "PyQt5.QtWidgets",
+        "PyQt5.QtPrintSupport",
+        "PyQt5.QtNetwork",
+        "PyQt5.sip",
+        "sip"
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

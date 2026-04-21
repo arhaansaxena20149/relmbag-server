@@ -1,16 +1,34 @@
 @echo off
 REM RelmBag Windows EXE Build Script
-REM Version: 1.4
+REM Version: 1.6
 
-set VERSION=1.4
-set ICON=assets\icons\pebblit.ico
+set VERSION=1.6
+
+echo ------------------------------------------------
+echo Verifying Dependencies...
+echo ------------------------------------------------
+py -m pip install PyQt5 Pillow requests bcrypt flask PyInstaller
 
 echo ------------------------------------------------
 echo Building RelmBag Player v%VERSION%...
 echo ------------------------------------------------
 
 REM Build Player EXE using the Windows spec file
-py -m PyInstaller --noconfirm --clean "RelmBag Player Windows.spec"
+REM Using --onefile flag in command line to override if spec is weird
+py -m PyInstaller --noconfirm --clean --onefile "RelmBag Player Windows.spec"
+
+if %ERRORLEVEL% NEQ 0 (
+    echo [ERROR] PyInstaller failed for Player app
+    pause
+    exit /b %ERRORLEVEL%
+)
+
+echo ------------------------------------------------
+echo Building RelmBag Admin v%VERSION%...
+echo ------------------------------------------------
+
+REM Build Admin EXE using the Windows spec file
+py -m PyInstaller --noconfirm --clean --onefile "RelmBag Admin Windows.spec"
 
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] PyInstaller failed for Player app
