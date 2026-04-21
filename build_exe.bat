@@ -1,20 +1,34 @@
 @echo off
 REM RelmBag Windows EXE Build Script
-REM Version: 1.8
+REM Version: 1.9 - Requires Python 3.11 or 3.12 (NOT 3.14 - PyQt5 has no wheels for it)
 
-set VERSION=1.8
+set VERSION=1.9
+set PYTHON_CMD=py -3.12
 
+REM Check if Python 3.12 is available, fallback to 3.11 if not
+%PYTHON_CMD% --version >nul 2>&1
+if %ERRORLEVEL% NEQ 0 (
+    set PYTHON_CMD=py -3.11
+    %PYTHON_CMD% --version >nul 2>&1
+    if %ERRORLEVEL% NEQ 0 (
+        echo [ERROR] Python 3.11 or 3.12 is required but not found. Please install from python.org
+        pause
+        exit /b 1
+    )
+)
+
+echo Using Python: %PYTHON_CMD%
 echo ------------------------------------------------
 echo Verifying Dependencies...
 echo ------------------------------------------------
-py -m pip install PyQt5 Pillow requests bcrypt flask PyInstaller
+%PYTHON_CMD% -m pip install PyQt5 Pillow requests bcrypt flask PyInstaller
 
 echo ------------------------------------------------
 echo Building RelmBag Player v%VERSION%...
 echo ------------------------------------------------
 
 REM Build Player EXE using the Windows spec file
-py -m PyInstaller --noconfirm --clean "RelmBag Player Windows.spec"
+%PYTHON_CMD% -m PyInstaller --noconfirm --clean "RelmBag Player Windows.spec"
 
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] PyInstaller failed for Player app
@@ -27,7 +41,7 @@ echo Building RelmBag Admin v%VERSION%...
 echo ------------------------------------------------
 
 REM Build Admin EXE using the Windows spec file
-py -m PyInstaller --noconfirm --clean "RelmBag Admin Windows.spec"
+%PYTHON_CMD% -m PyInstaller --noconfirm --clean "RelmBag Admin Windows.spec"
 
 if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] PyInstaller failed for Admin app
