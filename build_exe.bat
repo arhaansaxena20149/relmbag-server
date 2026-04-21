@@ -2,7 +2,7 @@
 REM RelmBag Windows EXE Build Script
 REM Version: 1.9 - Requires Python 3.11 or 3.12 (NOT 3.14 - PyQt5 has no wheels for it)
 
-set VERSION=1.9
+set VERSION=1.3
 set PYTHON_CMD=py -3.12
 
 REM Check if Python 3.12 is available, fallback to 3.11 if not

@@ -46,7 +46,7 @@ APP_ICON_ICO = ICONS_DIR / "pebblit.ico"
 
 APP_TITLE = "RelmBag Arena"
 APP_SUBTITLE = "Creature Crates, Trading, and Tactical Battles"
-APP_VERSION = "1.9"
+APP_VERSION = "1.3"
 
 CRATE_COST = 10
 MUTATION_COST = 100

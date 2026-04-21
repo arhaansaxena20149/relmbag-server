@@ -3,7 +3,7 @@
 # RelmBag DMG Build Script
 # Version: 1.8.1
 
-VERSION="1.8"
+VERSION="1.3"
 ICON="assets/icons/pebblit.icns"
 
 # Ensure npx/create-dmg and PyInstaller are available
