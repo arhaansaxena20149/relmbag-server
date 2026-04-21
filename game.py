@@ -3990,6 +3990,10 @@ class GameWindow(QMainWindow):
 
 
 def main() -> None:
+    # Diagnostic for Windows bundling issues
+    if getattr(sys, 'frozen', False):
+        print(f"[INFO] Running in bundled mode. Temp path: {getattr(sys, '_MEIPASS', 'N/A')}")
+    
     app = QApplication(sys.argv)
     app.setStyleSheet(APP_STYLESHEET)
     app.setWindowIcon(QIcon(str(APP_ICON_PNG)))
