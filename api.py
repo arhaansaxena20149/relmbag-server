@@ -1,6 +1,18 @@
 from __future__ import annotations
 from network import debug_log, safe_request, safe_json
 
+_ADMIN_TOKEN: str | None = None
+
+def set_admin_token(token: str | None) -> None:
+    global _ADMIN_TOKEN
+    _ADMIN_TOKEN = token
+
+
+def _admin_headers() -> dict:
+    if not _ADMIN_TOKEN:
+        return {}
+    return {"Authorization": f"Bearer {_ADMIN_TOKEN}"}
+
 def request_json(method: str, endpoint: str, **kwargs):
     """
     Perform a request and return the decoded JSON payload.
@@ -232,7 +244,7 @@ def ban_user(user_id: int, is_banned: bool = True) -> bool:
         response = safe_request("post", "ban_user", json={
             "user_id": user_id,
             "is_banned": is_banned
-        })
+        }, headers=_admin_headers())
         payload = safe_json(response)
         return payload and payload.get("status") == "success"
     except Exception as e:
@@ -243,7 +255,7 @@ def kick_user(user_id: int) -> bool:
     try:
         response = safe_request("post", "kick_user", json={
             "user_id": user_id
-        })
+        }, headers=_admin_headers())
         payload = safe_json(response)
         return payload and payload.get("status") == "success"
     except Exception as e:
@@ -255,7 +267,7 @@ def add_tokens(user_id: int | str, amount: int) -> bool:
         response = safe_request("post", "add_tokens", json={
             "user_id": user_id,
             "amount": amount
-        })
+        }, headers=_admin_headers())
         payload = safe_json(response)
         return payload and payload.get("status") == "success"
     except Exception as e:
@@ -267,7 +279,7 @@ def admin_abuse(action: str, user_id: int | str | None = None, amount: int = 0, 
         payload = {"action": action, "amount": amount, "message": message}
         if user_id is not None:
             payload["user_id"] = user_id
-        response = safe_request("post", "admin/abuse", json=payload)
+        response = safe_request("post", "admin/abuse", json=payload, headers=_admin_headers())
         return safe_json(response) or {}
     except Exception as e:
         print(f"[ERROR] Failed to execute admin abuse action '{action}': {e}")
@@ -279,11 +291,28 @@ def admin_give_creature(user_id: int | str, creature_name: str, level: int = 1) 
             "user_id": user_id,
             "creature_name": creature_name,
             "level": level,
-        })
+        }, headers=_admin_headers())
         return safe_json(response) or {}
     except Exception as e:
         print(f"[ERROR] Failed to give creature '{creature_name}' to user {user_id}: {e}")
         return {}
+
+
+def admin_login(username: str, password: str) -> dict:
+    """
+    Logs into the server and stores the admin token for subsequent admin actions.
+    """
+    global _ADMIN_TOKEN
+    response = safe_request("post", "admin/login", json={"username": username, "password": password})
+    payload = safe_json(response) or {}
+    if isinstance(payload, dict) and payload.get("status") == "success" and payload.get("admin_token"):
+        _ADMIN_TOKEN = str(payload["admin_token"])
+    return payload
+
+
+def admin_fetch_audit(limit: int = 50) -> dict:
+    response = safe_request("get", "admin/audit", params={"limit": int(limit)}, headers=_admin_headers())
+    return safe_json(response) or {}
 
 def start_minigame(user_id: int | str, session_token: str | None, game_name: str) -> dict:
     try:

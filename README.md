@@ -41,19 +41,19 @@ The system includes:
 1. Install dependencies:
 
 ```bash
-python3 -m pip install -r requirements.txt
+python3.14 -m pip install -r requirements.txt
 ```
 
 2. Initialize the database:
 
 ```bash
-python3 database.py
+python3.14 database.py
 ```
 
 3. Optional: seed demo accounts and starter creatures for testing trades and battles:
 
 ```bash
-python3 database.py --seed-demo
+python3.14 database.py --seed-demo
 ```
 
 Demo accounts created by the seed command:
@@ -67,16 +67,29 @@ Admin login:
 
 ## Run The Apps
 
+Server (local):
+
+```bash
+python3.14 server.py
+```
+
+Server (production-style):
+
+```bash
+python3.14 -m pip install -r requirements.txt
+gunicorn -w 2 -b 0.0.0.0:5050 wsgi:app
+```
+
 Player app:
 
 ```bash
-python3 game.py
+python3.14 game.py
 ```
 
 Admin panel:
 
 ```bash
-python3 admin.py
+python3.14 admin.py
 ```
 
 ## PvP Battle Flow

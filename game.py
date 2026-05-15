@@ -3,7 +3,7 @@ import sys
 import time
 from functools import partial
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThreadPool
-from PyQt5.QtGui import QCursor, QIcon
+from PyQt5.QtGui import QCursor, QIcon, QColor
 from PyQt5.QtWidgets import (
     QApplication,
     QComboBox,
@@ -735,6 +735,11 @@ class CratePage(BasePage):
         self.auto_sell_rarities: set[str] = set()
         self._summon_in_flight = False
         self._result_placeholder = load_pixmap("", 180)
+        self._pending_summon_result: dict | None = None
+        self._pending_summon_error: str | None = None
+        self._summon_anim_min_end: float = 0.0
+        self._summon_anim_hard_end: float = 0.0
+        self._summon_skip_requested = False
 
         layout = QVBoxLayout(self)
         layout.setSpacing(18)
@@ -764,6 +769,11 @@ class CratePage(BasePage):
         self.open_button = QPushButton("Open Crate")
         self.open_button.setObjectName("successButton")
         self.open_button.clicked.connect(self.open_crate)
+
+        self.skip_button = QPushButton("Skip")
+        self.skip_button.setObjectName("ghostButton")
+        self.skip_button.clicked.connect(self.skip_summon)
+        self.skip_button.setVisible(False)
         
         self.consecutive_button = QPushButton("Consecutive Open")
         self.consecutive_button.setObjectName("secondaryButton")
@@ -777,6 +787,7 @@ class CratePage(BasePage):
         
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.open_button)
+        btn_row.addWidget(self.skip_button)
         btn_row.addWidget(self.consecutive_button)
         btn_row.addWidget(self.auto_sell_button)
         btn_row.addStretch()
@@ -815,6 +826,17 @@ class CratePage(BasePage):
         result_layout.setContentsMargins(24, 24, 24, 24)
         result_title = QLabel("Latest Pull")
         result_title.setObjectName("sectionTitle")
+        self.reel_list = QListWidget()
+        self.reel_list.setFixedHeight(150)
+        self.reel_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.reel_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.reel_list.setFocusPolicy(Qt.NoFocus)
+        self.reel_list.setSelectionMode(QListWidget.NoSelection)
+        self.reel_list.setStyleSheet(
+            "QListWidget { background: rgba(0,0,0,0.16); border: 1px solid rgba(210,165,104,0.35); "
+            "border-radius: 16px; padding: 6px; }"
+            "QListWidget::item { padding: 8px 10px; border-radius: 12px; font-weight: 800; }"
+        )
         self.result_rarity = QLabel("No creature pulled yet")
         self.result_rarity.setAlignment(Qt.AlignCenter)
         self.result_rarity.setObjectName("pill")
@@ -834,6 +856,7 @@ class CratePage(BasePage):
         self.result_glow.setAlignment(Qt.AlignCenter)
         self.result_glow.setObjectName("mutedText")
         result_layout.addWidget(result_title)
+        result_layout.addWidget(self.reel_list)
         result_layout.addWidget(self.result_rarity, alignment=Qt.AlignCenter)
         result_layout.addWidget(self.result_image)
         result_layout.addWidget(self.result_name)
@@ -886,8 +909,15 @@ class CratePage(BasePage):
     def _set_summon_controls_enabled(self, enabled: bool) -> None:
         self._summon_in_flight = not enabled
         self.open_button.setEnabled(enabled)
+        self.skip_button.setVisible(not enabled)
         self.consecutive_button.setEnabled(enabled)
         self.auto_sell_button.setEnabled(enabled)
+
+    def skip_summon(self) -> None:
+        if not self._summon_in_flight:
+            return
+        self._summon_skip_requested = True
+        status_message(self.feedback_label, "Skipping summon animation…", "#AEBBD0")
 
     def claim_daily_reward(self) -> None:
         user = self.game_window.current_user
@@ -932,29 +962,146 @@ class CratePage(BasePage):
             status_message(self.feedback_label, "Not enough tokens.", "#F47C7C")
             return
         self.roll_ticks = 0
+        self._pending_summon_result = None
+        self._pending_summon_error = None
+        self._summon_skip_requested = False
+
         self._set_summon_controls_enabled(False)
-        status_message(self.feedback_label, "Crate spinning up...", "#F2C14E")
-        self.roll_timer.start(80)
+        status_message(self.feedback_label, "Summoning…", "#F2C14E")
+
+        # Start request immediately (in worker) while animation runs.
+        selected_auto_sell = set(self.auto_sell_rarities)
+
+        def _open_and_maybe_sell(username: str, sell_rarities: set[str]) -> dict:
+            result = api.request_json("post", "open_crate", json={"username": username}) or {}
+            if result.get("status") != "success":
+                raise ValueError(result.get("message", "Failed to open crate."))
+            creature = result.get("creature", {})
+            creature_id = creature.get("id")
+            if creature.get("rarity") in sell_rarities and creature_id is not None:
+                sell_result = api.request_json("post", "sell_creature", json={"user_id": username, "creature_id": creature_id}) or {}
+                if sell_result.get("status") == "success":
+                    refund = int(sell_result.get("refund", 0) or 0)
+                    result["auto_sold"] = True
+                    result["sell_refund"] = refund
+                    updated_tokens = sell_result.get("remaining_tokens")
+                    if updated_tokens is None:
+                        updated_tokens = int(result.get("remaining_tokens", 0) or 0) + refund
+                    result["remaining_tokens"] = int(updated_tokens)
+                else:
+                    result["auto_sell_error"] = sell_result.get("message", "Auto-sell failed.")
+            return result
+
+        worker = Worker(_open_and_maybe_sell, user.get("username"), selected_auto_sell)
+        worker.signals.finished.connect(self._on_summon_result_ready)
+        worker.signals.error.connect(lambda e: self._on_summon_error(str(e)))
+        QThreadPool.globalInstance().start(worker)
+
+        now = time.monotonic()
+        self._summon_anim_min_end = now + 1.25
+        self._summon_anim_hard_end = now + 4.5
+        self._prime_reel()
+        self.roll_timer.start(45)
 
     def _advance_roll_animation(self) -> None:
         self.roll_ticks += 1
-        
-        # Shuffle through random creatures
+        self._advance_reel_tick()
+
+        now = time.monotonic()
+        can_end = now >= self._summon_anim_min_end
+        must_end = now >= self._summon_anim_hard_end
+        if self._summon_skip_requested:
+            can_end = True
+
+        if self._pending_summon_error and (can_end or must_end):
+            self.roll_timer.stop()
+            self._set_summon_controls_enabled(True)
+            status_message(self.feedback_label, self._pending_summon_error, "#F47C7C")
+            return
+
+        if self._pending_summon_result is not None and can_end:
+            self.roll_timer.stop()
+            self._reveal_summon_result(self._pending_summon_result)
+            return
+
+        # If animation hits hard end but the server is still working, pause the reel.
+        if must_end and self._pending_summon_result is None and not self._pending_summon_error:
+            self.roll_timer.stop()
+            status_message(self.feedback_label, "Revealing…", "#F2C14E")
+
+    def _prime_reel(self) -> None:
+        self.reel_list.clear()
+        for _ in range(7):
+            self._append_reel_item()
+        self._style_reel_center()
+
+    def _append_reel_item(self) -> None:
         all_creatures = []
         for rarity_list in CREATURES_BY_RARITY.values():
             all_creatures.extend(rarity_list)
-        
-        random_creature = random.choice(all_creatures)
+        creature = random.choice(all_creatures)
+        rarity = creature.get("rarity", "Common")
+        name = creature.get("name", "Creature")
+        item = QListWidgetItem(f"{name}  •  {rarity}")
+        item.setData(Qt.UserRole, rarity)
+        self.reel_list.addItem(item)
+        if self.reel_list.count() > 9:
+            self.reel_list.takeItem(0)
+
+    def _style_reel_center(self) -> None:
+        center = self.reel_list.count() // 2
+        for i in range(self.reel_list.count()):
+            item = self.reel_list.item(i)
+            rarity = item.data(Qt.UserRole) or "Common"
+            color = RARITY_COLORS.get(rarity, "#FFF3D9")
+            if i == center:
+                item.setForeground(QColor(color))
+                item.setTextAlignment(Qt.AlignCenter)
+                item.setBackground(QColor(with_alpha(color, 55)))
+            else:
+                item.setForeground(QColor(with_alpha(color, 160)) if str(color).startswith("#") else QColor("#D0B594"))
+                item.setTextAlignment(Qt.AlignCenter)
+                item.setBackground(QColor(0, 0, 0, 0))
+
+    def _advance_reel_tick(self) -> None:
+        self._append_reel_item()
+        self.reel_list.scrollToBottom()
+        self._style_reel_center()
+
+        # Also update the big preview fields to match the center item.
+        center = self.reel_list.count() // 2
+        center_item = self.reel_list.item(center) if center is not None else None
+        if center_item is None:
+            return
+        text = center_item.text()
+        rarity = center_item.data(Qt.UserRole) or "Common"
         self.result_image.setPixmap(self._result_placeholder)
-        self.result_name.setText(random_creature["name"])
-        self.result_name.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {RARITY_COLORS[random_creature['rarity']]};")
-        self.result_rarity.setText(random_creature["rarity"])
-        self.result_rarity.setStyleSheet(rarity_badge_stylesheet(RARITY_COLORS[random_creature['rarity']]))
+        self.result_name.setText(text.split("  •  ")[0])
+        self.result_name.setStyleSheet(f"font-size: 22px; font-weight: 700; color: {RARITY_COLORS.get(rarity, '#FFF3D9')};")
+        self.result_rarity.setText(str(rarity))
+        self.result_rarity.setStyleSheet(rarity_badge_stylesheet(RARITY_COLORS.get(rarity, "#FFFFFF")))
 
-        if self.roll_ticks >= 15:
-            self.roll_timer.stop()
-            self._finish_roll()
+    def _on_summon_result_ready(self, result: dict) -> None:
+        self._pending_summon_result = result
+        # If the reel is paused (hard end), reveal immediately.
+        if not self.roll_timer.isActive():
+            if self._pending_summon_result is not None:
+                self._reveal_summon_result(self._pending_summon_result)
 
+    def _on_summon_error(self, message: str) -> None:
+        self._pending_summon_error = message
+        if not self.roll_timer.isActive():
+            self._set_summon_controls_enabled(True)
+            status_message(self.feedback_label, message, "#F47C7C")
+
+    def _reveal_summon_result(self, result: dict) -> None:
+        try:
+            self._set_summon_controls_enabled(True)
+            if not self._apply_crate_result(result, update_feedback=True):
+                return
+            self._refresh_post_summon_pages()
+        except RuntimeError:
+            pass
     def show_consecutive_dialog(self) -> None:
         user = self.game_window.current_user
         if not user:
@@ -1071,7 +1218,7 @@ class CratePage(BasePage):
         )
         self.result_stats.setText(
             "Combat Stats\n"
-            f"{creature_stat_row(creature)}\n"
+            f"{creature_stat_row(creature) if creature.get('stats') else 'Stats available after inventory refresh'}\n"
             f"Unlocked Moves: {', '.join(move.get('name', 'move') for move in creature.get('moves', []) if move.get('unlocked'))}"
         )
         self.result_glow.setText(
@@ -2855,6 +3002,69 @@ class GamesPage(BasePage):
 
         layout.addLayout(body2)
         layout.addStretch(1)
+        # New verified science/math games
+        body3 = QHBoxLayout()
+        body3.setSpacing(18)
+
+        math_panel = QFrame()
+        math_panel.setObjectName("panel")
+        apply_shadow(math_panel, blur=30, y_offset=10)
+        math_layout = QVBoxLayout(math_panel)
+        math_title = QLabel("Math Blitz")
+        math_title.setObjectName("sectionTitle")
+        math_desc = QLabel("Solve rapid-fire equations. Server verifies every answer.")
+        math_desc.setWordWrap(True)
+        math_desc.setStyleSheet("color: #A67B5B;")
+        self.math_game_btn = QPushButton("START MATH")
+        self.math_game_btn.setObjectName("secondaryButton")
+        self.math_game_btn.clicked.connect(self.start_math_game)
+        math_layout.addWidget(math_title)
+        math_layout.addWidget(math_desc)
+        math_layout.addStretch()
+        math_layout.addWidget(self.math_game_btn, 0, Qt.AlignCenter)
+        math_layout.addStretch()
+        body3.addWidget(math_panel, 1)
+
+        prime_panel = QFrame()
+        prime_panel.setObjectName("panel")
+        apply_shadow(prime_panel, blur=30, y_offset=10)
+        prime_layout = QVBoxLayout(prime_panel)
+        prime_title = QLabel("Prime Probe")
+        prime_title.setObjectName("sectionTitle")
+        prime_desc = QLabel("Identify primes and composites under pressure.")
+        prime_desc.setWordWrap(True)
+        prime_desc.setStyleSheet("color: #A67B5B;")
+        self.prime_game_btn = QPushButton("PROBE PRIMES")
+        self.prime_game_btn.setObjectName("secondaryButton")
+        self.prime_game_btn.clicked.connect(self.start_prime_game)
+        prime_layout.addWidget(prime_title)
+        prime_layout.addWidget(prime_desc)
+        prime_layout.addStretch()
+        prime_layout.addWidget(self.prime_game_btn, 0, Qt.AlignCenter)
+        prime_layout.addStretch()
+        body3.addWidget(prime_panel, 1)
+
+        science_panel = QFrame()
+        science_panel.setObjectName("panel")
+        apply_shadow(science_panel, blur=30, y_offset=10)
+        science_layout = QVBoxLayout(science_panel)
+        science_title = QLabel("Science Sprint")
+        science_title.setObjectName("sectionTitle")
+        science_desc = QLabel("Physics/chem/bio trivia rounds. Server verifies rewards.")
+        science_desc.setWordWrap(True)
+        science_desc.setStyleSheet("color: #A67B5B;")
+        self.science_game_btn = QPushButton("START SCIENCE")
+        self.science_game_btn.setObjectName("successButton")
+        self.science_game_btn.clicked.connect(self.start_science_game)
+        science_layout.addWidget(science_title)
+        science_layout.addWidget(science_desc)
+        science_layout.addStretch()
+        science_layout.addWidget(self.science_game_btn, 0, Qt.AlignCenter)
+        science_layout.addStretch()
+        body3.addWidget(science_panel, 1)
+
+        layout.addLayout(body3)
+        layout.addStretch(1)
         self.status_label = QLabel()
         layout.addWidget(self.status_label)
         self._game_in_flight = False
@@ -2865,6 +3075,9 @@ class GamesPage(BasePage):
             self.memory_game_btn,
             self.runner_game_btn,
             self.catcher_game_btn,
+            self.math_game_btn,
+            self.prime_game_btn,
+            self.science_game_btn,
         ]
 
     def start_fishing_game(self) -> None:
@@ -2884,6 +3097,15 @@ class GamesPage(BasePage):
 
     def start_catcher_game(self) -> None:
         self.start_server_game("TokenCatcher", CatcherGameDialog)
+
+    def start_math_game(self) -> None:
+        self.start_server_game("MathBlitz", QuizRushDialog)
+
+    def start_prime_game(self) -> None:
+        self.start_server_game("PrimeProbe", QuizRushDialog)
+
+    def start_science_game(self) -> None:
+        self.start_server_game("ScienceSprint", QuizRushDialog)
 
     def _set_game_buttons_enabled(self, enabled: bool) -> None:
         for button in self.game_buttons:

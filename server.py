@@ -33,6 +33,7 @@ import trading
 import combat
 import auth
 from datetime import datetime, timedelta
+import json
 
 # ...Configure logging
 logging.basicConfig(
@@ -60,6 +61,9 @@ MINIGAME_RULES = {
     "RelmRunner": {"reward": 10, "target": 1000, "min_ms": 7000, "max_ms": 120000, "score_cap": 1000},
     "TokenCatcher": {"reward": 12, "target": 20, "min_ms": 9000, "max_ms": 120000, "score_cap": 20},
     "RuneQuiz": {"reward_per_correct": 4, "question_count": 5, "min_ms": 4500, "max_ms": 180000, "score_cap": 5},
+    "MathBlitz": {"reward_per_correct": 3, "question_count": 8, "min_ms": 5000, "max_ms": 180000, "score_cap": 8},
+    "PrimeProbe": {"reward_per_correct": 3, "question_count": 8, "min_ms": 5000, "max_ms": 180000, "score_cap": 8},
+    "ScienceSprint": {"reward_per_correct": 4, "question_count": 6, "min_ms": 6000, "max_ms": 180000, "score_cap": 6},
 }
 
 RUNE_QUIZ_BANK = [
@@ -100,7 +104,25 @@ RUNE_QUIZ_BANK = [
     },
 ]
 
+SCIENCE_SPRINT_BANK = [
+    {"prompt": "What is the chemical symbol for Sodium?", "options": ["So", "Na", "S", "Sd"], "answer": 1},
+    {"prompt": "Which planet is known for its rings?", "options": ["Mars", "Venus", "Saturn", "Mercury"], "answer": 2},
+    {"prompt": "What force pulls objects toward Earth?", "options": ["Friction", "Gravity", "Magnetism", "Inertia"], "answer": 1},
+    {"prompt": "What does DNA stand for?", "options": ["Deoxyribonucleic acid", "Dynamic network array", "Dual nitrogen axis", "None"], "answer": 0},
+    {"prompt": "Which state of matter has a fixed shape?", "options": ["Gas", "Liquid", "Solid", "Plasma"], "answer": 2},
+    {"prompt": "What unit measures electric current?", "options": ["Volt", "Watt", "Ampere", "Ohm"], "answer": 2},
+    {"prompt": "What is H2O commonly known as?", "options": ["Salt", "Water", "Oxygen", "Hydrogen"], "answer": 1},
+    {"prompt": "Which is a renewable energy source?", "options": ["Coal", "Oil", "Solar", "Gasoline"], "answer": 2},
+]
+
 ACTIVE_GAME_SESSIONS: dict[str, dict] = {}
+
+# Small in-process cache for read-heavy endpoints.
+_USERS_CACHE: dict[str, object] = {"at": 0.0, "payload": None}
+
+# Admin auth: in-memory tokens (sufficient for a single Render service instance).
+_ADMIN_TOKENS: dict[str, dict] = {}
+_ADMIN_TOKEN_TTL_SECONDS = 60 * 60 * 6  # 6 hours
 
 # --------------------------
 # DATABASE
@@ -166,6 +188,89 @@ def verify_password(password, stored):
 import auth # Import auth after defining helpers to avoid circularity if needed, 
            # but auth.py doesn't import server.py so it's fine.
 
+def _admin_token_from_request() -> str | None:
+    auth_header = request.headers.get("Authorization") or ""
+    if auth_header.lower().startswith("bearer "):
+        return auth_header.split(" ", 1)[1].strip() or None
+    header_token = (request.headers.get("X-Admin-Token") or "").strip()
+    return header_token or None
+
+
+def _require_admin() -> tuple[str | None, tuple[dict, int] | None]:
+    token = _admin_token_from_request()
+    if not token:
+        return None, ({"status": "error", "message": "Admin token required."}, 401)
+
+    record = _ADMIN_TOKENS.get(token)
+    if not record:
+        return None, ({"status": "error", "message": "Invalid admin token."}, 401)
+
+    expires_at = float(record.get("expires_at", 0))
+    if time.time() >= expires_at:
+        _ADMIN_TOKENS.pop(token, None)
+        return None, ({"status": "error", "message": "Admin token expired."}, 401)
+
+    return str(record.get("admin_username") or ADMIN_USERNAME), None
+
+
+def _audit_admin_action(admin_username: str, action: str, target_user_id: int | None, payload: dict) -> None:
+    try:
+        with transaction() as conn:
+            conn.execute(
+                """
+                INSERT INTO admin_audit (admin_username, action, target_user_id, payload_json)
+                VALUES (?, ?, ?, ?)
+                """,
+                (admin_username, action, target_user_id, json.dumps(payload or {}, ensure_ascii=False)),
+            )
+    except Exception as e:
+        logger.error("Admin audit insert failed: %s", e)
+
+
+@app.route("/admin/login", methods=["POST"])
+def admin_login():
+    data = request.json or {}
+    username = str(data.get("username", "") or "").strip()
+    password = str(data.get("password", "") or "").strip()
+    if not username or not password:
+        return jsonify({"status": "error", "message": "Missing credentials."}), 400
+    if username != ADMIN_USERNAME or password != ADMIN_PASSWORD:
+        return jsonify({"status": "error", "message": "Invalid admin credentials."}), 401
+
+    token = secrets.token_urlsafe(32)
+    _ADMIN_TOKENS[token] = {
+        "admin_username": username,
+        "created_at": time.time(),
+        "expires_at": time.time() + _ADMIN_TOKEN_TTL_SECONDS,
+    }
+    _audit_admin_action(username, "admin_login", None, {"username": username})
+    return jsonify({"status": "success", "admin_token": token, "expires_in": _ADMIN_TOKEN_TTL_SECONDS})
+
+
+@app.route("/admin/audit", methods=["GET"])
+def admin_audit():
+    admin_username, error = _require_admin()
+    if error:
+        payload, status = error
+        return jsonify(payload), status
+
+    limit = max(1, min(_coerce_int(request.args.get("limit"), 50), 200))
+    try:
+        rows = database.fetch_all(
+            """
+            SELECT id, admin_username, action, target_user_id, payload_json, created_at
+            FROM admin_audit
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        _audit_admin_action(admin_username or ADMIN_USERNAME, "admin_audit_view", None, {"limit": limit})
+        return jsonify({"status": "success", "rows": rows})
+    except Exception as e:
+        logger.error("Admin audit fetch failed: %s", e)
+        return jsonify({"status": "error", "message": "Failed to fetch audit log."}), 500
+
 def roll_rarity():
     rarities = [
         ("Common", 72.0),
@@ -188,6 +293,142 @@ def roll_rarity():
         if roll <= current:
             return rarity
     return "Common"
+
+WEATHER_TYPES = [
+    "Clear",
+    "Rain",
+    "Storm",
+    "Heatwave",
+    "Blizzard",
+    "Aurora",
+    "Eclipse",
+    "MeteorShower",
+]
+
+WORLD_EVENTS = [
+    "None",
+    "MutationSurge",
+    "CelestialRift",
+    "LabAccident",
+    "QuantumFlux",
+]
+
+
+def _world_state_row() -> dict:
+    row = database.fetch_one("SELECT weather, event, rotates_at, updated_at FROM world_state WHERE id = 1")
+    if not row:
+        return {"weather": "Clear", "event": "None", "rotates_at": 0, "updated_at": None}
+    return row
+
+
+def _rotate_world_state_if_needed() -> dict:
+    state = _world_state_row()
+    now = int(time.time())
+    rotates_at = int(state.get("rotates_at", 0) or 0)
+    if rotates_at and now < rotates_at:
+        return state
+
+    # Lazy rotation (done on request) to avoid background threads in multi-worker setups.
+    weather = random.choice(WEATHER_TYPES)
+    event_roll = random.random()
+    event = "None" if event_roll < 0.65 else random.choice([e for e in WORLD_EVENTS if e != "None"])
+    next_rot = now + 60 * 45  # 45 minutes
+
+    try:
+        with transaction() as conn:
+            conn.execute(
+                "UPDATE world_state SET weather = ?, event = ?, rotates_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+                (weather, event, next_rot),
+            )
+        return {"weather": weather, "event": event, "rotates_at": next_rot, "updated_at": None}
+    except Exception as e:
+        logger.error("World state rotation failed: %s", e)
+        return state
+
+
+def get_world_state() -> dict:
+    return _rotate_world_state_if_needed()
+
+
+def roll_context_mutation(weather: str, event: str) -> str:
+    """
+    Roll a mutation influenced by weather/event. Returns mutation name or 'None'.
+    """
+    base_chance = 0.03
+    weather_bonus = {
+        "Clear": 0.00,
+        "Rain": 0.01,
+        "Storm": 0.03,
+        "Heatwave": 0.015,
+        "Blizzard": 0.02,
+        "Aurora": 0.035,
+        "Eclipse": 0.06,
+        "MeteorShower": 0.045,
+    }.get(weather, 0.0)
+    event_bonus = {
+        "None": 0.0,
+        "MutationSurge": 0.12,
+        "CelestialRift": 0.08,
+        "LabAccident": 0.06,
+        "QuantumFlux": 0.05,
+    }.get(event, 0.0)
+
+    chance = min(0.35, base_chance + weather_bonus + event_bonus)
+    if random.random() > chance:
+        return "None"
+
+    # Weighted selection from MUTATION_RATES excluding None
+    candidates = [(name, float(rate)) for name, rate in MUTATION_RATES.items() if name != "None" and float(rate) > 0]
+    if not candidates:
+        return "None"
+    names = [c[0] for c in candidates]
+    weights = [c[1] for c in candidates]
+    return random.choices(names, weights=weights, k=1)[0]
+
+
+@app.route("/world/state", methods=["GET"])
+def world_state():
+    state = get_world_state()
+    return jsonify({"status": "success", **state})
+
+
+@app.route("/admin/world/set", methods=["POST"])
+def admin_set_world():
+    admin_username, error = _require_admin()
+    if error:
+        payload, status = error
+        return jsonify(payload), status
+
+    data = request.json or {}
+    weather = str(data.get("weather", "") or "").strip() or None
+    event = str(data.get("event", "") or "").strip() or None
+    duration_minutes = max(5, min(_coerce_int(data.get("duration_minutes"), 45), 6 * 60))
+
+    if weather is not None and weather not in WEATHER_TYPES:
+        return jsonify({"status": "error", "message": "Unknown weather type."}), 400
+    if event is not None and event not in WORLD_EVENTS:
+        return jsonify({"status": "error", "message": "Unknown event type."}), 400
+
+    try:
+        state = _world_state_row()
+        new_weather = weather or state.get("weather", "Clear")
+        new_event = event if event is not None else state.get("event", "None")
+        rotates_at = int(time.time()) + int(duration_minutes) * 60
+        with transaction() as conn:
+            conn.execute(
+                "UPDATE world_state SET weather = ?, event = ?, rotates_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1",
+                (new_weather, new_event, rotates_at),
+            )
+        _audit_admin_action(
+            admin_username or ADMIN_USERNAME,
+            "admin_set_world",
+            None,
+            {"weather": new_weather, "event": new_event, "duration_minutes": int(duration_minutes)},
+        )
+        return jsonify({"status": "success", "weather": new_weather, "event": new_event, "rotates_at": rotates_at})
+    except Exception as e:
+        logger.error("Admin set world failed: %s", e)
+        return jsonify({"status": "error", "message": "Failed to update world state."}), 500
 
 CREATURES = {
     "Common": ["Pebblit", "Sprig", "Fluffo"],
@@ -301,6 +542,13 @@ def reset_password():
 @app.route("/users", methods=["GET"])
 def get_users():
     try:
+        now = time.time()
+        cached_at = float(_USERS_CACHE.get("at", 0.0) or 0.0)
+        cached_payload = _USERS_CACHE.get("payload")
+        # Cache the roster briefly to reduce burst load from admin + clients.
+        if cached_payload is not None and now - cached_at < 2.0:
+            return jsonify(cached_payload)
+
         # Increased threshold to 90s to be more resilient to network lag
         users = database.list_admin_players(within_seconds=90)
         logger.debug("Fetched %d users for admin/roster.", len(users))
@@ -308,6 +556,8 @@ def get_users():
         for u in users:
             u["online"] = bool(u.get("is_online", False))
             u["is_online"] = bool(u.get("is_online", False))
+        _USERS_CACHE["at"] = now
+        _USERS_CACHE["payload"] = users
         return jsonify(users)
     except Exception as e:
         logger.error(f"Failed to fetch users: {e}")
@@ -315,6 +565,11 @@ def get_users():
 
 @app.route("/ban_user", methods=["POST"])
 def ban_user():
+    admin_username, error = _require_admin()
+    if error:
+        payload, status = error
+        return jsonify(payload), status
+
     data = request.json or {}
     user_id = data.get("user_id")
     is_banned = data.get("is_banned", True)
@@ -324,6 +579,12 @@ def ban_user():
         database.ban_user(user_id, is_banned)
         action = "banned" if is_banned else "unbanned"
         logger.info(f"User {user_id} {action}")
+        _audit_admin_action(
+            admin_username or ADMIN_USERNAME,
+            "ban_user" if is_banned else "unban_user",
+            _coerce_int(user_id, 0) or None,
+            {"user_id": user_id, "is_banned": bool(is_banned)},
+        )
         return jsonify({"status": "success"})
     except Exception as e:
         logger.error(f"Failed to ban/unban user {user_id}: {e}")
@@ -331,6 +592,11 @@ def ban_user():
 
 @app.route("/kick_user", methods=["POST"])
 def kick_user():
+    admin_username, error = _require_admin()
+    if error:
+        payload, status = error
+        return jsonify(payload), status
+
     data = request.json or {}
     user_id = data.get("user_id")
     if user_id is None:
@@ -338,6 +604,12 @@ def kick_user():
     try:
         database.kick_user(user_id)
         logger.info(f"User {user_id} kicked")
+        _audit_admin_action(
+            admin_username or ADMIN_USERNAME,
+            "kick_user",
+            _coerce_int(user_id, 0) or None,
+            {"user_id": user_id},
+        )
         return jsonify({"status": "success"})
     except Exception as e:
         logger.error(f"Failed to kick user {user_id}: {e}")
@@ -345,6 +617,11 @@ def kick_user():
 
 @app.route("/add_tokens", methods=["POST"])
 def add_tokens():
+    admin_username, error = _require_admin()
+    if error:
+        payload, status = error
+        return jsonify(payload), status
+
     data = request.json or {}
     amount = _coerce_int(data.get("amount"), 0)
     user_id = data.get("user_id")
@@ -361,8 +638,15 @@ def add_tokens():
 
         if not user:
              return jsonify({"status": "error", "message": "User not found"}), 404
-             
+
+        before_tokens = int(user.get("tokens", 0) or 0)
         current_tokens = database.adjust_user_tokens(user["id"], amount)
+        _audit_admin_action(
+            admin_username or ADMIN_USERNAME,
+            "add_tokens",
+            int(user["id"]),
+            {"delta": int(amount), "before": before_tokens, "after": int(current_tokens)},
+        )
         return jsonify({"status": "success", "current_tokens": current_tokens})
     except Exception as e:
         logger.error(f"Failed to add tokens: {e}")
@@ -407,13 +691,17 @@ def open_crate():
         creature_key = random.choice(available_creatures).lower().replace(" ", "_")
         creature_name = creature_key.replace("_", " ").title()
 
+        state = get_world_state()
+        mutation = roll_context_mutation(str(state.get("weather", "Clear")), str(state.get("event", "None")))
+
         creature_id = database.insert_creature(
             user_id=user["id"],
             creature_key=creature_key,
             creature_name=creature_name,
             rarity=rarity,
             image_path=f"assets/generated/sprites/{creature_key}.png",
-            value_roll=random.uniform(0.7, 1.3)
+            value_roll=random.uniform(0.7, 1.3),
+            mutation=mutation,
         )
 
         logger.info(f"Crate opened by {user['username']} (ID: {user['id']}): {creature_name} ({rarity})")
@@ -427,12 +715,14 @@ def open_crate():
                 "rarity": rarity,
                 "image_path": f"assets/generated/sprites/{creature_key}.png",
                 "rarity_color": RARITY_COLORS.get(rarity, "#FFFFFF"),
+                "mutation": mutation,
                 "level": 1,
                 "value": BASE_VALUES.get(rarity, 10) # Simple fallback for value
             },
             "remaining_tokens": user["tokens"] - 10,
             "current_tokens": user["tokens"] - 10,
-            "crate_cost": 10
+            "crate_cost": 10,
+            "world_state": state,
         })
     except Exception as e:
         logger.error(f"Crate opening failed: {e}")
@@ -688,7 +978,7 @@ def submit_move():
     data = request.json or {}
     battle_id = data.get("battle_id")
     user_id = data.get("user_id")
-    move_name = data.get("move_name")
+    move_name = data.get("move") or data.get("move_name")  # FIX: Accept both keys for compatibility
     try:
         snapshot = combat.submit_move(int(battle_id), int(user_id), move_name)
         return jsonify(snapshot)
@@ -841,6 +1131,11 @@ def chat():
 
 @app.route("/admin/give_creature", methods=["POST"])
 def admin_give_creature():
+    admin_username, error = _require_admin()
+    if error:
+        payload, status = error
+        return jsonify(payload), status
+
     data = request.json or {}
     user_id = data.get("user_id")
     creature_name = data.get("creature_name")
@@ -866,7 +1161,8 @@ def admin_give_creature():
             creature_name=template.get("name", str(creature_name).title()),
             rarity=rarity,
             image_path=f"assets/generated/sprites/{creature_key}.png",
-            value_roll=1.0
+            value_roll=1.0,
+            mutation="None",
         )
         
         # Update level if needed
@@ -875,6 +1171,12 @@ def admin_give_creature():
                 conn.execute("UPDATE owned_creatures SET level = ? WHERE id = ?", (level, creature_id))
                 
         logger.info(f"Admin gave {template.get('name', creature_name)} (Lv {level}) to {user['username']}")
+        _audit_admin_action(
+            admin_username or ADMIN_USERNAME,
+            "admin_give_creature",
+            int(user["id"]),
+            {"user_id": user_id, "creature_name": creature_name, "level": int(level), "rarity": rarity},
+        )
         return jsonify({
             "status": "success",
             "message": f"Gave {template.get('name', creature_name)} (Lv {level}) to {user['username']}.",
@@ -1034,6 +1336,71 @@ def start_minigame():
             {"prompt": q["prompt"], "options": q["options"]}
             for q in questions
         ]
+    elif game_name == "ScienceSprint":
+        questions = random.sample(SCIENCE_SPRINT_BANK, rules["question_count"])
+        session["answers"] = [q["answer"] for q in questions]
+        challenge["questions"] = [
+            {"prompt": q["prompt"], "options": q["options"]}
+            for q in questions
+        ]
+    elif game_name == "MathBlitz":
+        q_count = int(rules["question_count"])
+        questions = []
+        answers: list[int] = []
+        for _ in range(q_count):
+            a = random.randint(2, 25)
+            b = random.randint(2, 25)
+            op = random.choice(["+", "-", "*"])
+            if op == "+":
+                correct = a + b
+                prompt = f"{a} + {b} = ?"
+            elif op == "-":
+                correct = a - b
+                prompt = f"{a} - {b} = ?"
+            else:
+                correct = a * b
+                prompt = f"{a} × {b} = ?"
+
+            # Build 4 options including correct answer
+            distractors = {correct}
+            while len(distractors) < 4:
+                jitter = random.randint(-10, 10)
+                distractors.add(correct + jitter)
+            opts = list(distractors)
+            random.shuffle(opts)
+            answer_index = opts.index(correct)
+            questions.append({"prompt": prompt, "options": [str(x) for x in opts]})
+            answers.append(answer_index)
+        session["answers"] = answers
+        challenge["questions"] = questions
+    elif game_name == "PrimeProbe":
+        def is_prime(n: int) -> bool:
+            if n < 2:
+                return False
+            if n in (2, 3):
+                return True
+            if n % 2 == 0:
+                return False
+            i = 3
+            while i * i <= n:
+                if n % i == 0:
+                    return False
+                i += 2
+            return True
+
+        q_count = int(rules["question_count"])
+        questions = []
+        answers: list[int] = []
+        for _ in range(q_count):
+            n = random.randint(5, 99)
+            correct_is_prime = is_prime(n)
+            prompt = f"Is {n} a prime number?"
+            options = ["Prime", "Composite"]
+            answer_index = 0 if correct_is_prime else 1
+            questions.append({"prompt": prompt, "options": options})
+            answers.append(answer_index)
+        session["answers"] = answers
+        challenge["questions"] = questions
 
     ACTIVE_GAME_SESSIONS[session_id] = session
     return jsonify({
@@ -1075,7 +1442,7 @@ def finish_minigame():
 
     reward = 0
     score = 0
-    if game_name == "RuneQuiz":
+    if game_name in {"RuneQuiz", "ScienceSprint", "MathBlitz", "PrimeProbe"}:
         answers = data.get("answers", [])
         if not isinstance(answers, list):
             answers = []
@@ -1084,7 +1451,7 @@ def finish_minigame():
             1 for expected, actual in zip(correct_answers, answers)
             if _coerce_int(actual, -1) == expected
         )
-        reward = min(score, int(rules["score_cap"])) * int(rules["reward_per_correct"])
+        reward = min(score, int(rules["score_cap"])) * int(rules.get("reward_per_correct", 0))
     else:
         score = min(max(0, _coerce_int(data.get("score", 0), 0)), int(rules["score_cap"]))
         if score < int(rules["target"]):
@@ -1112,6 +1479,11 @@ def game_reward():
 
 @app.route("/admin/abuse", methods=["POST"])
 def admin_abuse():
+    admin_username, error = _require_admin()
+    if error:
+        payload, status = error
+        return jsonify(payload), status
+
     data = request.json or {}
     action = data.get("action")
     target_user_id = data.get("user_id") # Optional specific target
@@ -1207,7 +1579,8 @@ def admin_abuse():
                             creature_name=creature_key.replace("_", " ").title(),
                             rarity=rarity,
                             image_path=f"assets/generated/sprites/{creature_key}.png",
-                            value_roll=1.5
+                            value_roll=1.5,
+                            mutation="None",
                         )
                     affected = 4
                     response_message = f"Gave a high-tier creature set to {target_user['username']}."
@@ -1225,6 +1598,12 @@ def admin_abuse():
                 elif action not in global_actions:
                     return jsonify({"status": "error", "message": "That action requires a supported target flow"}), 400
 
+        _audit_admin_action(
+            admin_username or ADMIN_USERNAME,
+            f"admin_abuse:{action}",
+            int(target_user.get("id")) if isinstance(target_user, dict) and target_user.get("id") is not None else None,
+            {"action": action, "target_user_id": target_user_id, "amount": int(amount), "message": message, "affected": int(affected)},
+        )
         return jsonify({"status": "success", "message": response_message, "affected": affected})
     except Exception as e:
         logger.error(f"Admin abuse failed: {e}")
@@ -1234,7 +1613,7 @@ def admin_abuse():
 def home():
     return jsonify({
         "status": "online",
-        "version": "1.2",
+        "version": "1.4",
         "service": "RelmBag Arena Server",
         "database": str(DATABASE_PATH),
         "source": DATABASE_PATH_SOURCE,

@@ -354,6 +354,27 @@ QPushButton#dangerButton:hover {
 QPushButton#ghostButton {
     background: transparent;
     border: 1px solid #9A7652;
+    color: #F6E9D6;
+}
+QPushButton#ghostButton:hover {
+    background: rgba(217, 174, 113, 0.10);
+    border-color: #E3B873;
+    color: #FFF3D9;
+}
+QPushButton#ghostButton:pressed {
+    background: rgba(217, 174, 113, 0.18);
+}
+
+QListWidget {
+    background: transparent;
+    border: none;
+}
+QListWidget::item {
+    border: 1px solid transparent;
+}
+QListWidget::item:hover {
+    border: 1px solid rgba(217, 174, 113, 0.22);
+    background: rgba(0, 0, 0, 0.10);
 }
 QPushButton#navButton {
     text-align: left;

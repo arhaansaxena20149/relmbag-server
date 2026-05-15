@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 APP_NAME = "RelmBag Player"
-APP_VERSION = "1.3"
+APP_VERSION = "1.4"
 
 a = Analysis(
     ["game.py"],

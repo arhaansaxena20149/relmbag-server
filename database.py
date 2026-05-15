@@ -3,26 +3,54 @@ from __future__ import annotations
 import argparse
 import sqlite3
 from contextlib import contextmanager
+from threading import Lock
 from typing import Any, Iterable, Iterator
 
 from config import DATABASE_PATH, ensure_directories
 
+_SCHEMA_READY = False
+_SCHEMA_LOCK = Lock()
 
-def get_connection() -> sqlite3.Connection:
-    ensure_directories()
-    connection = sqlite3.connect(DATABASE_PATH)
+
+def _configure_connection(connection: sqlite3.Connection) -> None:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-    
-    # We always run the schema check/migration logic to ensure everything is up to date
-    # across different environments (local, Render, etc.)
-    try:
+    # Pragmas tuned for server-side latency and reasonable durability.
+    connection.execute("PRAGMA busy_timeout = 5000")
+    connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA synchronous = NORMAL")
+    connection.execute("PRAGMA temp_store = MEMORY")
+    connection.execute("PRAGMA cache_size = -20000")  # ~20MB, negative = KiB units
+
+
+def _ensure_schema(connection: sqlite3.Connection) -> None:
+    """
+    Ensure schema/migrations have been applied.
+
+    We do this once per process (each gunicorn worker), instead of on every request,
+    to avoid repeated PRAGMA table_info/ALTER TABLE work.
+    """
+    global _SCHEMA_READY
+    if _SCHEMA_READY:
+        return
+    with _SCHEMA_LOCK:
+        if _SCHEMA_READY:
+            return
         _create_schema(connection)
         connection.commit()
-    except Exception as e:
-        # We don't want to crash everything if one migration fails, 
-        # but we should at least log it.
-        print(f"[ERROR] Database schema initialization/migration failed: {e}")
+        _SCHEMA_READY = True
+
+
+def get_connection(*, ensure_schema: bool = True) -> sqlite3.Connection:
+    ensure_directories()
+    connection = sqlite3.connect(DATABASE_PATH, timeout=5, check_same_thread=False)
+    _configure_connection(connection)
+    if ensure_schema:
+        try:
+            _ensure_schema(connection)
+        except Exception as e:
+            # Don't crash the whole app if a migration fails, but do surface it.
+            print(f"[ERROR] Database schema initialization/migration failed: {e}")
     return connection
 
 
@@ -117,6 +145,34 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         );
         """
     )
+
+    # Admin audit table (server-side only)
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS admin_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            admin_username TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target_user_id INTEGER,
+            payload_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+
+    # World state (weather + event). Singleton row with id=1.
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS world_state (
+            id INTEGER PRIMARY KEY CHECK(id = 1),
+            weather TEXT NOT NULL DEFAULT 'Clear',
+            event TEXT NOT NULL DEFAULT 'None',
+            rotates_at INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    connection.execute("INSERT OR IGNORE INTO world_state (id) VALUES (1)")
 
     # Migration for trades table
     has_trades = connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='trades'").fetchone() is not None
@@ -236,6 +292,7 @@ def _create_schema(connection: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_battles_status ON battles(status);
         CREATE INDEX IF NOT EXISTS idx_battles_challenger_id ON battles(challenger_id);
         CREATE INDEX IF NOT EXISTS idx_battles_opponent_id ON battles(opponent_id);
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_created_at ON admin_audit(created_at);
         """
     )
 
@@ -257,6 +314,9 @@ def initialize_database(seed_demo: bool = False) -> None:
     ensure_directories()
     with transaction() as connection:
         _create_schema(connection)
+        # Mark schema as ready so later connections skip checks.
+        global _SCHEMA_READY
+        _SCHEMA_READY = True
 
     from sprite_loader import ensure_sprite_assets
 
@@ -452,6 +512,7 @@ def insert_creature(
     value_roll: float,
     level: int = 1,
     xp: int = 0,
+    mutation: str = "None",
 ) -> int:
     with transaction() as connection:
         cursor = connection.execute(
@@ -464,11 +525,12 @@ def insert_creature(
                 image_path,
                 level,
                 xp,
-                value_roll
+                value_roll,
+                mutation
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, creature_key, creature_name, rarity, image_path, level, xp, value_roll),
+            (user_id, creature_key, creature_name, rarity, image_path, level, xp, value_roll, mutation),
         )
         return int(cursor.lastrowid)
 

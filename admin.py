@@ -207,14 +207,26 @@ class AdminLoginPage(QWidget):
         layout.addStretch(1)
 
     def handle_login(self) -> None:
-        if (
-            self.username_input.text().strip() == ADMIN_USERNAME
-            and self.password_input.text().strip() == ADMIN_PASSWORD
-        ):
+        username = self.username_input.text().strip()
+        password = self.password_input.text().strip()
+        if not username or not password:
+            set_status(self.status_label, "Enter admin username and password.", "#F2C14E")
+            return
+
+        set_status(self.status_label, "Contacting server...", "#F2C14E")
+        worker = Worker(api.admin_login, username, password)
+        worker.signals.finished.connect(self._on_login_finished)
+        worker.signals.error.connect(lambda e: set_status(self.status_label, str(e), "#F47C7C"))
+        QThreadPool.globalInstance().start(worker)
+
+    def _on_login_finished(self, payload: dict) -> None:
+        if isinstance(payload, dict) and payload.get("status") == "success" and payload.get("admin_token"):
             set_status(self.status_label, "Admin login successful.", "#63D471")
+            self.password_input.clear()
             self.authenticated.emit()
             return
-        set_status(self.status_label, "Invalid admin credentials.", "#F47C7C")
+        message = payload.get("message", "Invalid admin credentials.") if isinstance(payload, dict) else "Invalid admin credentials."
+        set_status(self.status_label, message, "#F47C7C")
 
 
 class AdminPlayerCard(QFrame):
@@ -329,6 +341,11 @@ class AdminPanelPage(QWidget):
         abuse_btn.setObjectName("dangerButton")
         abuse_btn.clicked.connect(self.main_window.show_abuse_panel)
         header.addWidget(abuse_btn)
+
+        audit_btn = QPushButton("Audit Log")
+        audit_btn.setObjectName("secondaryButton")
+        audit_btn.clicked.connect(self.show_audit_log)
+        header.addWidget(audit_btn)
 
         logout_btn = QPushButton("Logout")
         logout_btn.setObjectName("secondaryButton")
@@ -471,6 +488,58 @@ class AdminPanelPage(QWidget):
         body.addWidget(user_panel, 1)
         root.addLayout(body)
         self._set_detail_buttons_enabled(False)
+
+    def show_audit_log(self) -> None:
+        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Admin Audit Log")
+        dialog.resize(900, 520)
+        dialog.setStyleSheet(self.window().styleSheet())
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(22, 22, 22, 22)
+        layout.setSpacing(12)
+
+        title = QLabel("RECENT ADMIN ACTIONS")
+        title.setObjectName("sectionTitle")
+        layout.addWidget(title)
+
+        self._audit_box = QTextEdit()
+        self._audit_box.setReadOnly(True)
+        self._audit_box.setPlainText("Loading audit log…")
+        layout.addWidget(self._audit_box, 1)
+
+        worker = Worker(api.admin_fetch_audit, 120)
+        worker.signals.finished.connect(lambda payload: self._on_audit_fetched(payload, dialog))
+        worker.signals.error.connect(lambda e: self._audit_box.setPlainText(str(e)))
+        QThreadPool.globalInstance().start(worker)
+
+        dialog.exec_()
+
+    def _on_audit_fetched(self, payload: dict, dialog) -> None:
+        if not isinstance(payload, dict) or payload.get("status") != "success":
+            message = payload.get("message", "Could not load audit log.") if isinstance(payload, dict) else "Could not load audit log."
+            self._audit_box.setPlainText(message)
+            return
+
+        rows = payload.get("rows", [])
+        if not rows:
+            self._audit_box.setPlainText("No audit entries yet.")
+            return
+
+        lines: list[str] = []
+        for row in rows:
+            try:
+                created_at = row.get("created_at", "")
+                admin_user = row.get("admin_username", "")
+                action = row.get("action", "")
+                target = row.get("target_user_id", None)
+                payload_json = row.get("payload_json", "{}")
+                lines.append(f"[{created_at}] {admin_user} :: {action} :: target={target} :: {payload_json}")
+            except Exception:
+                continue
+        self._audit_box.setPlainText("\n".join(lines))
 
     def activate(self) -> None:
         self.refresh_roster(announce=True)

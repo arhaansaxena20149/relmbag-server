@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # RelmBag DMG Build Script
-# Version: 1.8.1
+# Version: 1.3
 
-VERSION="1.3"
+VERSION="1.4"
 ICON="assets/icons/pebblit.icns"
 
 # Ensure npx/create-dmg and PyInstaller are available
@@ -12,8 +12,8 @@ if ! command -v npx &> /dev/null; then
     exit 1
 fi
 
-if ! python3 -m PyInstaller --version &> /dev/null; then
-    echo "[ERROR] pyinstaller not found. Install with: pip install pyinstaller"
+if ! python3.14 -m PyInstaller --version &> /dev/null; then
+    echo "[ERROR] pyinstaller not found. Install with: python3.14 -m pip install pyinstaller"
     exit 1
 fi
 
@@ -35,8 +35,8 @@ build_app() {
     rm -rf build dist "${output_dmg}"
 
     # 2. Build .app bundle using spec file
-    # Explicitly setting workpath to ensure it doesn't use protected folders
-    python3 -m PyInstaller --noconfirm --workpath="./build" --distpath="./dist" "${spec_file}"
+    # --clean wipes the PyInstaller cache to avoid stale/corrupt binary errors
+    python3.14 -m PyInstaller --noconfirm --clean --workpath="./build" --distpath="./dist" "${spec_file}"
 
     if [ $? -ne 0 ]; then
         echo "[ERROR] PyInstaller failed for ${app_name}"
@@ -56,6 +56,10 @@ build_app() {
 
     echo "Successfully created: ${output_dmg}"
 }
+
+# Delete old DMGs before building new ones
+echo "Cleaning up old DMG files..."
+rm -f RelmBag.Player.*.dmg RelmBag.Admin.*.dmg
 
 # Build Player App
 build_app "RelmBag Player.spec" "RelmBag Player" "RelmBag.Player.${VERSION}.dmg"
